@@ -4,12 +4,26 @@ from __future__ import annotations
 from enum import StrEnum
 
 
+class TDCGroup(StrEnum):
+    ADME = "ADME"
+    TOX = "Tox"
+
+
 class Endpoint(StrEnum):
-    SOLUBILITY = "ESOL"
+    SOLUBILITY = "Solubility_AqSolDB"
     LIPOPHILICITY = "Lipophilicity_AstraZeneca"
     CYP3A4 = "CYP3A4_Veith"
     CLEARANCE = "Clearance_Hepatocyte_AZ"
     HERG = "hERG"
+
+
+ENDPOINT_TDC_GROUP: dict[str, TDCGroup] = {
+    Endpoint.SOLUBILITY: TDCGroup.ADME,
+    Endpoint.LIPOPHILICITY: TDCGroup.ADME,
+    Endpoint.CYP3A4: TDCGroup.ADME,
+    Endpoint.CLEARANCE: TDCGroup.ADME,
+    Endpoint.HERG: TDCGroup.TOX,
+}
 
 
 class Task(StrEnum):

@@ -26,6 +26,7 @@ help:
 	@echo ""
 
 install:
+	$(PYTHON) -m pip install --no-deps PyTDC
 	$(PYTHON) -m pip install -r requirements.txt -e .
 
 install-dev: install
