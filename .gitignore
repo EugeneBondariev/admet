@@ -1,0 +1,14 @@
+/data/
+/models/
+/logs/
+/reports/
+.env
+.vscode/
+.claude/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+requirements-lock.txt
+CLAUDE.md
