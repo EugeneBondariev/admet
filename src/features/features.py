@@ -60,11 +60,16 @@ def scaffold_split(
     smiles: list[str],
     test_size: float = 0.2,
     y: np.ndarray | None = None,
+    tolerance: float = 0.02,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Split by Murcko scaffold — no scaffold appears in both train and test.
 
     Assigns rarest scaffolds (smallest groups) to test first so the test set
     covers diverse chemical space rather than a single dominant series.
+    Scaffolds move as whole groups, so the test set can only land on exact
+    test_size by luck; a group is skipped (left in train) if adding it would
+    push test past test_size + tolerance, keeping the realized split close
+    enough to compare metrics across endpoints and against TDC.
     If y is provided, ensures all classes appear in the test set (important for
     small classification datasets like hERG).
     """
@@ -80,13 +85,35 @@ def scaffold_split(
 
     groups = sorted(scaffold_to_indices.values(), key=len)
     n_test_target = int(len(smiles) * test_size)
-    test_idx, train_idx = [], []
+    n_test_cap = int(len(smiles) * (test_size + tolerance))
+    test_idx: list[int] = []
+    train_idx: list[int] = []
+    skipped: list[int] = []
 
     for group in groups:
-        if len(test_idx) < n_test_target:
+        if len(test_idx) >= n_test_target:
+            train_idx.extend(group)
+        elif len(test_idx) + len(group) <= n_test_cap:
             test_idx.extend(group)
         else:
+            skipped.append(len(group))
             train_idx.extend(group)
+
+    if not test_idx:
+        raise ValueError(
+            f"No scaffold group fits in a {100 * (test_size + tolerance):.0f}% test set "
+            f"(smallest group has {min(len(g) for g in groups)} of {len(smiles)} molecules) — "
+            f"raise tolerance or test_size"
+        )
+
+    if skipped:
+        logger.info(
+            "Left %d scaffold group(s) in train (largest %d molecules) — would have pushed "
+            "test past %.0f%%",
+            len(skipped),
+            max(skipped),
+            100 * (test_size + tolerance),
+        )
 
     if y is not None:
         train_set = set(train_idx)
@@ -104,10 +131,22 @@ def scaffold_split(
         train_idx = list(train_set)
         test_idx = list(test_set)
 
+    index_to_scaffold = {i: s for s, indices in scaffold_to_indices.items() for i in indices}
+    realized = len(test_idx) / len(smiles)
     logger.info(
-        "Scaffold split: %d train / %d test (%.0f%% test)",
+        "Scaffold split: %d train / %d test (%.1f%% test) — %d train scaffolds / %d test scaffolds",
         len(train_idx),
         len(test_idx),
-        100 * len(test_idx) / len(smiles),
+        100 * realized,
+        len({index_to_scaffold[i] for i in train_idx}),
+        len({index_to_scaffold[i] for i in test_idx}),
     )
+    if abs(realized - test_size) > tolerance:
+        logger.warning(
+            "Realized test fraction %.1f%% is outside %.0f%% ± %.0f%% — scaffold group sizes "
+            "prevent a closer split; metrics are not directly comparable to other endpoints",
+            100 * realized,
+            100 * test_size,
+            100 * tolerance,
+        )
     return np.array(train_idx), np.array(test_idx)

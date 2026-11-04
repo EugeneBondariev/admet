@@ -1,0 +1,166 @@
+"""Tests for featurization and the Murcko scaffold split.
+
+All molecules here are real SMILES — the point is to exercise RDKit's actual
+scaffold assignment, not a stand-in for it. Group sizes are controlled by
+building series of analogs that share one core (same scaffold) alongside
+distinct ring systems (one molecule per scaffold).
+"""
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+import pytest
+from rdkit import Chem
+from rdkit.Chem.Scaffolds import MurckoScaffold
+
+from src.features.features import FP_BITS, featurize, scaffold_split
+
+# Four unrelated cores; alkyl chains of increasing length give distinct
+# molecules that all reduce to the same Murcko scaffold.
+BENZENE = "c1ccccc1"
+NAPHTHALENE = "c1ccc2ccccc2c1"
+PYRIDINE = "c1ccncc1"
+QUINOLINE = "c1ccc2ncccc2c1"
+
+
+def _series(core: str, n: int) -> list[str]:
+    """n analogs sharing one scaffold, differing only in a terminal alkyl chain."""
+    return ["C" * (i + 1) + core for i in range(n)]
+
+
+def _singletons(n: int) -> list[str]:
+    """n molecules with n distinct scaffolds — cycloalkanes of increasing ring size."""
+    return ["C1" + "C" * (size - 1) + "1" for size in range(3, 3 + n)]
+
+
+def _scaffolds(smiles: list[str]) -> set[str]:
+    return {
+        MurckoScaffold.MurckoScaffoldSmiles(mol=Chem.MolFromSmiles(smi), includeChirality=False)
+        for smi in smiles
+    }
+
+
+def test_series_helper_really_shares_one_scaffold() -> None:
+    # The premise every size-controlled test below depends on.
+    assert _scaffolds(_series(BENZENE, 5)) == {BENZENE}
+    assert len(_scaffolds(_singletons(10))) == 10
+
+
+def test_split_is_a_partition() -> None:
+    smiles = _singletons(30) + _series(BENZENE, 40)
+    train_idx, test_idx = scaffold_split(smiles)
+
+    assert set(train_idx).isdisjoint(set(test_idx))
+    assert sorted([*train_idx, *test_idx]) == list(range(len(smiles)))
+
+
+def test_no_scaffold_appears_in_both_splits() -> None:
+    smiles = _singletons(25) + _series(BENZENE, 20) + _series(NAPHTHALENE, 15)
+    train_idx, test_idx = scaffold_split(smiles)
+
+    train_scaffolds = _scaffolds([smiles[i] for i in train_idx])
+    test_scaffolds = _scaffolds([smiles[i] for i in test_idx])
+    assert train_scaffolds.isdisjoint(test_scaffolds)
+
+
+def test_analogs_of_the_same_core_are_never_separated() -> None:
+    # aspirin, toluene and paracetamol all reduce to benzene, so they are
+    # inseparable by a scaffold split even though they are unrelated drugs.
+    drugs = ["CC(=O)Oc1ccccc1C(=O)O", "Cc1ccccc1", "CC(=O)Nc1ccc(O)cc1"]
+    smiles = _singletons(30) + drugs
+    train_idx, test_idx = scaffold_split(smiles)
+
+    benzene_idx = {len(smiles) - 3, len(smiles) - 2, len(smiles) - 1}
+    assert benzene_idx <= set(train_idx) or benzene_idx <= set(test_idx)
+
+
+def test_rare_scaffolds_go_to_test_and_the_big_series_stays_in_train() -> None:
+    smiles = _singletons(30) + _series(BENZENE, 60)
+    train_idx, test_idx = scaffold_split(smiles)
+
+    test_scaffolds = _scaffolds([smiles[i] for i in test_idx])
+    assert test_scaffolds <= _scaffolds(_singletons(30))
+    assert BENZENE not in test_scaffolds
+    assert all(i < 30 for i in test_idx)
+    assert set(range(30, len(smiles))) <= set(train_idx)
+
+
+def test_straddling_group_is_left_in_train_rather_than_overshooting() -> None:
+    # 18 singletons fill test to 18%; the next group of 12 would take it to 30%,
+    # past the 20% + 2% cap, so it stays in train and test stops at 18.
+    smiles = _singletons(18) + _series(BENZENE, 12) + _series(NAPHTHALENE, 70)
+    assert len(smiles) == 100
+
+    train_idx, test_idx = scaffold_split(smiles)
+
+    assert len(test_idx) == 18
+    assert len(test_idx) / len(smiles) <= 0.22
+
+
+def test_tolerance_can_be_widened_to_admit_a_larger_group() -> None:
+    smiles = _singletons(18) + _series(BENZENE, 12) + _series(NAPHTHALENE, 70)
+
+    _, test_idx = scaffold_split(smiles, tolerance=0.15)
+
+    # 18 + 12 = 30 now fits under the 35% cap, so the benzene series joins test.
+    assert len(test_idx) == 30
+    assert BENZENE in _scaffolds([smiles[i] for i in test_idx])
+
+
+def test_raises_when_no_scaffold_group_is_small_enough() -> None:
+    smiles = (
+        _series(BENZENE, 50)
+        + _series(NAPHTHALENE, 50)
+        + _series(PYRIDINE, 50)
+        + _series(QUINOLINE, 50)
+    )
+
+    with pytest.raises(ValueError, match="No scaffold group fits"):
+        scaffold_split(smiles)
+
+
+def test_classification_split_forces_every_class_into_test() -> None:
+    # All singletons are negative and the whole positive class sits in one
+    # series, which rare-first filling would leave entirely in train.
+    smiles = _singletons(30) + _series(BENZENE, 60)
+    y = np.array([0.0] * 30 + [1.0] * 60, dtype=np.float32)
+
+    train_idx, test_idx = scaffold_split(smiles, y=y)
+
+    assert set(np.unique(y[test_idx])) == {0.0, 1.0}
+    # The repair moves whole scaffold groups, so the core invariant must survive.
+    assert set(train_idx).isdisjoint(set(test_idx))
+    train_scaffolds = _scaffolds([smiles[i] for i in train_idx])
+    assert train_scaffolds.isdisjoint(_scaffolds([smiles[i] for i in test_idx]))
+
+
+def test_featurize_returns_aligned_x_y_and_smiles() -> None:
+    smiles = ["CCO", "c1ccccc1", "CC(=O)Oc1ccccc1C(=O)O"]
+    df = pd.DataFrame({"Drug": smiles, "Y": [1.0, 2.0, 3.0]})
+
+    X, y, smiles_out = featurize(df)
+
+    assert X.shape[0] == 3
+    assert X.shape[1] > FP_BITS  # fingerprint bits plus RDKit descriptors
+    assert X.dtype == np.float32
+    assert np.array_equal(y, np.array([1.0, 2.0, 3.0], dtype=np.float32))
+    assert smiles_out == smiles
+
+
+def test_featurize_drops_unparseable_smiles_and_keeps_labels_aligned() -> None:
+    df = pd.DataFrame({"Drug": ["CCO", "notamolecule", "c1ccccc1"], "Y": [1.0, 2.0, 3.0]})
+
+    X, y, smiles_out = featurize(df)
+
+    assert X.shape[0] == 2
+    assert np.array_equal(y, np.array([1.0, 3.0], dtype=np.float32))
+    assert smiles_out == ["CCO", "c1ccccc1"]
+
+
+def test_featurize_fingerprint_block_is_binary() -> None:
+    df = pd.DataFrame({"Drug": ["CC(=O)Oc1ccccc1C(=O)O"], "Y": [0.0]})
+
+    X, _, _ = featurize(df)
+
+    assert set(np.unique(X[:, :FP_BITS])) <= {0.0, 1.0}
+    assert X[:, :FP_BITS].sum() > 0
