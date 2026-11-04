@@ -26,7 +26,7 @@ from torch_geometric.nn import SchNet
 from src.constants import ENDPOINT_TASK, LOG_TRANSFORM, Endpoint, Task
 from src.features.features import scaffold_split
 from src.features.mol_graph import load_or_build_dataset
-from src.paths import MODELS_DIR, RAW, REPORTS
+from src.paths import MODELS_DIR, RAW, REPORTS_GNN
 
 logger = logging.getLogger(__name__)
 
@@ -255,7 +255,7 @@ def main() -> None:
             for k, v in metrics.items():
                 mlflow.log_metric(key=f"{endpoint}.gnn.{k}", value=v)
 
-    report_path = REPORTS / f"gnn_{run_ts.strftime('%Y%m%d_%H%M%S')}.json"
+    report_path = REPORTS_GNN / f"gnn_{run_ts.strftime('%Y%m%d_%H%M%S')}.json"
     report_path.write_text(
         json.dumps(
             {"timestamp": run_ts.isoformat(), "epochs": args.epochs, "results": results},

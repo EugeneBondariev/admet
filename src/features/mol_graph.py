@@ -28,7 +28,7 @@ _ETKDG.randomSeed = 42
 def smiles_to_graph(smiles: str, y: float) -> Data | None:
     """Generate a 3D conformer and return a PyG Data object, or None on failure."""
     mol = Chem.MolFromSmiles(smiles)
-    if mol is None:
+    if mol is None or mol.GetNumAtoms() == 0:
         return None
 
     mol = Chem.AddHs(mol)

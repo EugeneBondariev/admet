@@ -25,7 +25,7 @@ from sklearn.metrics import (
 
 from src.constants import ENDPOINT_TASK, LOG_TRANSFORM, Endpoint, Task
 from src.features.features import load_or_featurize, scaffold_split
-from src.paths import CONFIG, MODELS_DIR, RAW, REPORTS
+from src.paths import CONFIG, MODELS_DIR, RAW, REPORTS_PREDICT
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ def main() -> None:
             for k, v in metrics.items():
                 mlflow.log_metric(key=f"{endpoint}.{k}", value=v)
 
-    report_path = REPORTS / f"predict_{run_ts.strftime('%Y%m%d_%H%M%S')}.json"
+    report_path = REPORTS_PREDICT / f"predict_{run_ts.strftime('%Y%m%d_%H%M%S')}.json"
     report_path.write_text(
         json.dumps(
             {"timestamp": run_ts.isoformat(), "params": _LGBM_BASE, "results": results},
