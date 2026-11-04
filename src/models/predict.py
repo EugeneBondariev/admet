@@ -7,8 +7,11 @@ Run: python -m src.models.predict
 """
 from __future__ import annotations
 
+import json
 import logging
+from datetime import datetime
 
+import mlflow
 import numpy as np
 import pandas as pd
 from lightgbm import LGBMClassifier, LGBMRegressor
@@ -20,13 +23,11 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-from src.constants import ENDPOINT_TASK, Endpoint, Task
-from src.features.features import featurize, scaffold_split
-from src.paths import PROCESSED, RAW
+from src.constants import ENDPOINT_TASK, LOG_TRANSFORM, Endpoint, Task
+from src.features.features import load_or_featurize, scaffold_split
+from src.paths import CONFIG, MODELS_DIR, RAW, REPORTS
 
 logger = logging.getLogger(__name__)
-
-LOG_TRANSFORM: set[Endpoint] = {Endpoint.CLEARANCE}
 
 _LGBM_BASE: dict = dict(
     n_estimators=500,
@@ -41,25 +42,13 @@ _LGBM_BASE: dict = dict(
 )
 
 
-def _load_or_featurize(
-    endpoint: Endpoint, df: pd.DataFrame
-) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    cache = PROCESSED / f"{endpoint}_features.npz"
-    if cache.exists():
-        raw = RAW / f"{endpoint}.parquet"
-        if raw.stat().st_mtime > cache.stat().st_mtime:
-            logger.warning(
-                "Raw data for %s is newer than feature cache — delete %s to rebuild",
-                endpoint,
-                cache,
-            )
-        logger.info("Loading cached features for %s", endpoint)
-        data = np.load(cache)
-        return data["X"], data["y"], list(data["smiles"])
-    X, y, smiles = featurize(df)
-    np.savez_compressed(str(cache), X=X, y=y, smiles=np.array(smiles))
-    logger.info("Cached features → %s", cache.name)
-    return X, y, smiles
+def _model_params(endpoint: Endpoint) -> dict:
+    tuned = CONFIG / f"{endpoint}_best_params.json"
+    if tuned.exists():
+        params = json.loads(tuned.read_text())
+        logger.info("Using tuned params for %s", endpoint)
+        return {**params, "random_state": 42, "n_jobs": -1, "verbose": -1}
+    return _LGBM_BASE
 
 
 def _auprc(y_true: np.ndarray, y_prob: np.ndarray) -> float:
@@ -70,7 +59,7 @@ def _auprc(y_true: np.ndarray, y_prob: np.ndarray) -> float:
 def run_endpoint(endpoint: Endpoint) -> dict[str, float]:
     logger.info("--- %s ---", endpoint)
     df = pd.read_parquet(RAW / f"{endpoint}.parquet")
-    X, y, smiles = _load_or_featurize(endpoint, df)
+    X, y, smiles = load_or_featurize(endpoint=endpoint, df=df)
 
     task = ENDPOINT_TASK[endpoint]
     train_idx, test_idx = scaffold_split(
@@ -79,10 +68,11 @@ def run_endpoint(endpoint: Endpoint) -> dict[str, float]:
     X_train, X_test = X[train_idx], X[test_idx]
     y_train, y_test = y[train_idx], y[test_idx]
 
+    params = _model_params(endpoint)
     if task == Task.REGRESSION:
         if endpoint in LOG_TRANSFORM:
             y_train = np.log1p(y_train)
-        regressor = LGBMRegressor(**_LGBM_BASE)
+        regressor = LGBMRegressor(**params)
         regressor.fit(X_train, y_train)
         y_pred = np.asarray(regressor.predict(X_test))
         if endpoint in LOG_TRANSFORM:
@@ -92,7 +82,7 @@ def run_endpoint(endpoint: Endpoint) -> dict[str, float]:
         logger.info("RMSE: %.4f   R²: %.4f", rmse, r2)
         return {"rmse": rmse, "r2": r2}
     else:
-        classifier = LGBMClassifier(**_LGBM_BASE)
+        classifier = LGBMClassifier(**params)
         classifier.fit(X_train, y_train)
         y_prob = np.asarray(classifier.predict_proba(X_test))[:, 1]
         roc = float(roc_auc_score(y_test, y_prob))
@@ -103,9 +93,28 @@ def run_endpoint(endpoint: Endpoint) -> dict[str, float]:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    mlflow.set_tracking_uri(f"sqlite:///{MODELS_DIR / 'mlflow.db'}")
+    mlflow.set_experiment("admet")
+
+    run_ts = datetime.now()
     results: dict[str, dict[str, float]] = {}
-    for endpoint in Endpoint:
-        results[str(endpoint)] = run_endpoint(endpoint)
+
+    with mlflow.start_run(run_name=run_ts.strftime("%Y%m%d_%H%M%S")):
+        mlflow.log_params(_LGBM_BASE)
+        for endpoint in Endpoint:
+            metrics = run_endpoint(endpoint)
+            results[str(endpoint)] = metrics
+            for k, v in metrics.items():
+                mlflow.log_metric(key=f"{endpoint}.{k}", value=v)
+
+    report_path = REPORTS / f"predict_{run_ts.strftime('%Y%m%d_%H%M%S')}.json"
+    report_path.write_text(
+        json.dumps(
+            {"timestamp": run_ts.isoformat(), "params": _LGBM_BASE, "results": results},
+            indent=2,
+        )
+    )
+    logger.info("Report → %s", report_path)
 
     logger.info("\n=== SUMMARY ===")
     for name, metrics in results.items():

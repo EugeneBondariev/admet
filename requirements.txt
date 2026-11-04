@@ -9,4 +9,9 @@ huggingface_hub>=0.20.3
 datasets>=2.19.0
 requests>=2.31.0
 fuzzywuzzy>=0.18.0
-setuptools==69.5.1
+mlflow>=2.10.0
+optuna>=3.0.0
+torch>=2.1.0
+torch-geometric>=2.5.0
+torch-cluster>=1.6.3
+setuptools>=77.0.3

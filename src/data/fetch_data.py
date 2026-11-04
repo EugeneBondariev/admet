@@ -10,7 +10,7 @@ import logging
 from tdc.single_pred import ADME, Tox
 
 from src.constants import ENDPOINT_TDC_GROUP, Endpoint, TDCGroup
-from src.paths import RAW
+from src.paths import EXTERNAL, RAW
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ def fetch_endpoint(endpoint: Endpoint, force: bool = False) -> None:
         return
     logger.info("Fetching %s ...", endpoint)
     cls = _TDC_CLASS[ENDPOINT_TDC_GROUP[endpoint]]
-    df = cls(name=endpoint).get_data()
+    df = cls(name=endpoint, path=str(EXTERNAL)).get_data()
     df.to_parquet(out, index=False)
     logger.info("  %d rows -> %s", len(df), out.name)
 

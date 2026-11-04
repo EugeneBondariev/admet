@@ -39,6 +39,8 @@ ENDPOINT_TASK: dict[Endpoint, Task] = {
     Endpoint.HERG: Task.CLASSIFICATION,
 }
 
+LOG_TRANSFORM: frozenset[Endpoint] = frozenset({Endpoint.CLEARANCE})
+
 ENDPOINT_LABEL: dict[Endpoint, str] = {
     Endpoint.SOLUBILITY: "logS (mol/L)",
     Endpoint.LIPOPHILICITY: "logD (pH 7.4)",

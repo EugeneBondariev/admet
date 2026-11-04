@@ -14,6 +14,7 @@ PROCESSED = DATA / "processed"
 MODELS_DIR = ROOT / "models"
 REPORTS = ROOT / "reports"
 LOGS = ROOT / "logs"
+CONFIG = ROOT / "config"
 
-for _dir in (RAW, EXTERNAL, INTERIM, PROCESSED, MODELS_DIR, REPORTS, LOGS):
+for _dir in (RAW, EXTERNAL, INTERIM, PROCESSED, MODELS_DIR, REPORTS, LOGS, CONFIG):
     _dir.mkdir(parents=True, exist_ok=True)

@@ -1,7 +1,7 @@
 PYTHON = python
 export PYTHONUNBUFFERED := 1
 
-.PHONY: help install install-dev freeze push typecheck lint test test-e2e fetch validate predict
+.PHONY: help install install-dev freeze push typecheck lint test test-e2e fetch validate predict mlflow tune gnn
 
 help:
 	@echo ""
@@ -22,7 +22,10 @@ help:
 	@echo "  validate         Re-validate all data files on disk"
 	@echo ""
 	@echo "Model:"
-	@echo "  predict          Train + evaluate all endpoints"
+	@echo "  predict          Train + evaluate all endpoints (uses tuned params if present)"
+	@echo "  tune             Hyperparameter search with Optuna (saves to config/)"
+	@echo "  gnn              Train SchNet GNN with 3D geometry (GPU recommended)"
+	@echo "  mlflow           Open MLflow experiment tracking UI"
 	@echo ""
 
 install:
@@ -58,3 +61,12 @@ validate:
 
 predict:
 	$(PYTHON) -m src.models.predict
+
+tune:
+	$(PYTHON) -m src.models.tune
+
+gnn:
+	$(PYTHON) -m src.models.gnn
+
+mlflow:
+	$(PYTHON) -m mlflow ui --backend-store-uri sqlite:///models/mlflow.db
