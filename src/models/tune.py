@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+from typing import Any
 
 import mlflow
 import numpy as np
@@ -37,7 +38,7 @@ def _objective(
     task: Task,
     log_transform: bool,
 ) -> float:
-    params = dict(
+    params: dict[str, Any] = dict(
         n_estimators=trial.suggest_int("n_estimators", 200, 1500),
         learning_rate=trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
         num_leaves=trial.suggest_int("num_leaves", 15, 255),
