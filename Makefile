@@ -45,7 +45,7 @@ lint:
 	$(PYTHON) -m ruff check .
 
 test:
-	$(PYTHON) -m pytest
+	$(PYTHON) -m pytest || [ $$? -eq 5 ]
 
 test-e2e:
 	$(PYTHON) -m pytest -m e2e

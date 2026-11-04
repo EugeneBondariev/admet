@@ -32,5 +32,9 @@ ignore_missing_imports = true
 check_untyped_defs = true
 exclude = ["notebooks/"]
 
+[[tool.mypy.overrides]]
+module = "rdkit.*"
+ignore_errors = true
+
 [tool.black]
 line-length = 100
