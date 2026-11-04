@@ -21,12 +21,12 @@ from sklearn.metrics import (
 )
 
 from src.constants import ENDPOINT_TASK, Endpoint, Task
-
-LOG_TRANSFORM: set[Endpoint] = {Endpoint.CLEARANCE}
 from src.features.features import featurize, scaffold_split
 from src.paths import PROCESSED, RAW
 
 logger = logging.getLogger(__name__)
+
+LOG_TRANSFORM: set[Endpoint] = {Endpoint.CLEARANCE}
 
 _LGBM_BASE: dict = dict(
     n_estimators=500,
@@ -82,9 +82,9 @@ def run_endpoint(endpoint: Endpoint) -> dict[str, float]:
     if task == Task.REGRESSION:
         if endpoint in LOG_TRANSFORM:
             y_train = np.log1p(y_train)
-        model = LGBMRegressor(**_LGBM_BASE)
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
+        regressor = LGBMRegressor(**_LGBM_BASE)
+        regressor.fit(X_train, y_train)
+        y_pred = np.asarray(regressor.predict(X_test))
         if endpoint in LOG_TRANSFORM:
             y_pred = np.expm1(y_pred)
         rmse = float(mean_squared_error(y_test, y_pred) ** 0.5)
@@ -92,9 +92,9 @@ def run_endpoint(endpoint: Endpoint) -> dict[str, float]:
         logger.info("RMSE: %.4f   R²: %.4f", rmse, r2)
         return {"rmse": rmse, "r2": r2}
     else:
-        model = LGBMClassifier(**_LGBM_BASE)
-        model.fit(X_train, y_train)
-        y_prob = model.predict_proba(X_test)[:, 1]
+        classifier = LGBMClassifier(**_LGBM_BASE)
+        classifier.fit(X_train, y_train)
+        y_prob = np.asarray(classifier.predict_proba(X_test))[:, 1]
         roc = float(roc_auc_score(y_test, y_prob))
         prc = _auprc(y_test, y_prob)
         logger.info("ROC-AUC: %.4f   AUPRC: %.4f", roc, prc)
@@ -108,9 +108,9 @@ def main() -> None:
         results[str(endpoint)] = run_endpoint(endpoint)
 
     logger.info("\n=== SUMMARY ===")
-    for endpoint, metrics in results.items():
+    for name, metrics in results.items():
         metric_str = "   ".join(f"{k}: {v:.4f}" for k, v in metrics.items())
-        logger.info("%-40s %s", endpoint, metric_str)
+        logger.info("%-40s %s", name, metric_str)
 
 
 if __name__ == "__main__":
