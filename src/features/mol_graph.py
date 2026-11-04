@@ -18,6 +18,7 @@ from torch_geometric.data import Data
 from src.paths import PROCESSED, RAW
 
 RDLogger.DisableLog("rdApp.warning")
+RDLogger.DisableLog("rdApp.error")
 
 logger = logging.getLogger(__name__)
 
