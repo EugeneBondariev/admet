@@ -1,4 +1,5 @@
 PYTHON = python
+PYTHON_VENV = .venv/Scripts/python.exe
 export PYTHONUNBUFFERED := 1
 
 .PHONY: help install install-dev freeze push typecheck lint test test-e2e fetch validate predict mlflow tune gnn
@@ -66,7 +67,7 @@ tune:
 	$(PYTHON) -m src.models.tune
 
 gnn:
-	$(PYTHON) -m src.models.gnn
+	$(PYTHON_VENV) -m src.models.gnn
 
 mlflow:
-	$(PYTHON) -m mlflow ui --backend-store-uri sqlite:///models/mlflow.db
+	$(PYTHON_VENV) -m mlflow ui --backend-store-uri sqlite:///models/mlflow.db
