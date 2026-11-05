@@ -1,4 +1,4 @@
-"""Validate raw ADMET parquet files downloaded from TDC.
+"""Validate the ADMET parquet files converted from TDC downloads.
 
 Checks: expected columns, no nulls in key fields, row count minimums,
 RDKit-parseable SMILES, label ranges per task type.
@@ -12,7 +12,7 @@ import pandas as pd
 from rdkit import Chem
 
 from src.constants import ENDPOINT_TASK, Endpoint, Task
-from src.paths import RAW
+from src.paths import INTERIM
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ def _check_smiles(smiles: pd.Series) -> int:
 
 
 def validate_endpoint(endpoint: Endpoint) -> bool:
-    path = RAW / f"{endpoint}.parquet"
+    path = INTERIM / f"{endpoint}.parquet"
     if not path.exists():
         logger.error("[%s] file not found — run make fetch first", endpoint)
         return False

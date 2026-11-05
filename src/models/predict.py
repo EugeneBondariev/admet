@@ -24,7 +24,7 @@ from sklearn.metrics import (
 
 from src.constants import ENDPOINT_TASK, Endpoint, Task
 from src.features.features import featurize, scaffold_split
-from src.paths import PROCESSED, RAW
+from src.paths import INTERIM, PROCESSED
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +56,10 @@ def _load_or_featurize(
 ) -> tuple[np.ndarray, np.ndarray, list[str]]:
     cache = PROCESSED / f"{endpoint}_features.npz"
     if cache.exists():
-        raw = RAW / f"{endpoint}.parquet"
-        if raw.stat().st_mtime > cache.stat().st_mtime:
+        source = INTERIM / f"{endpoint}.parquet"
+        if source.stat().st_mtime > cache.stat().st_mtime:
             logger.warning(
-                "Raw data for %s is newer than feature cache — delete %s to rebuild",
+                "Interim data for %s is newer than feature cache — delete %s to rebuild",
                 endpoint,
                 cache,
             )
@@ -126,7 +126,7 @@ def run_endpoint(
     measured — so a single split is not a usable estimate. sd is nan for one seed.
     """
     logger.info("--- %s ---", endpoint)
-    df = pd.read_parquet(RAW / f"{endpoint}.parquet")
+    df = pd.read_parquet(INTERIM / f"{endpoint}.parquet")
     X, y, smiles = _load_or_featurize(endpoint, df)
 
     per_seed = [_run_one_split(endpoint, X, y, smiles, seed) for seed in seeds]

@@ -1,4 +1,7 @@
-"""Download all ADMET datasets from TDC and save to data/raw/ as parquet.
+"""Download all ADMET datasets from TDC and convert them to parquet.
+
+TDC writes its own .tab download into data/raw/ (immutable source of truth);
+this module converts each to data/interim/{endpoint}.parquet.
 
 Data source: Therapeutics Data Commons (https://tdcommons.ai)
 Run: python -m src.data.fetch_data
@@ -10,7 +13,7 @@ import logging
 from tdc.single_pred import ADME, Tox
 
 from src.constants import ENDPOINT_TDC_GROUP, Endpoint, TDCGroup
-from src.paths import RAW
+from src.paths import INTERIM, RAW
 
 logger = logging.getLogger(__name__)
 
@@ -18,13 +21,15 @@ _TDC_CLASS = {TDCGroup.ADME: ADME, TDCGroup.TOX: Tox}
 
 
 def fetch_endpoint(endpoint: Endpoint, force: bool = False) -> None:
-    out = RAW / f"{endpoint}.parquet"
+    out = INTERIM / f"{endpoint}.parquet"
     if out.exists() and not force:
         logger.info("Skipping %s (already exists)", endpoint)
         return
     logger.info("Fetching %s ...", endpoint)
     cls = _TDC_CLASS[ENDPOINT_TDC_GROUP[endpoint]]
-    df = cls(name=endpoint).get_data()
+    # path=RAW keeps TDC's .tab download in data/raw/ instead of ./data, which
+    # it defaults to — that default is relative to the shell's cwd, not the project.
+    df = cls(name=endpoint, path=str(RAW)).get_data()
     df.to_parquet(out, index=False)
     logger.info("  %d rows -> %s", len(df), out.name)
 
