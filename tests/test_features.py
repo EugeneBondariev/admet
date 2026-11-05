@@ -222,6 +222,18 @@ def test_raises_when_a_class_cannot_reach_the_test_set() -> None:
         scaffold_split(smiles, y=y)
 
 
+def test_unparseable_smiles_are_forced_into_train() -> None:
+    # featurize() drops these, so this only happens on raw input. A molecule with
+    # no features cannot be predicted, so it must never land in test.
+    smiles = _singletons(30) + ["not_a_molecule", "%%%"] + _series(BENZENE, 18)
+
+    train_idx, test_idx = scaffold_split(smiles)
+
+    bad = {30, 31}
+    assert bad <= set(train_idx)
+    assert not bad & set(test_idx)
+
+
 def test_regression_split_covers_the_whole_label_range() -> None:
     # Low labels sit in singleton scaffolds and high labels only in pairs, so
     # rare-first filling reaches the bottom of the range and never the top —

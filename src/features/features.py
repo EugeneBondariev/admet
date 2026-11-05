@@ -102,16 +102,28 @@ def scaffold_split(
     carrying it is too large.
     """
     scaffold_to_indices: dict[str, list[int]] = {}
+    unparseable: list[int] = []
     for i, smi in enumerate(smiles):
         mol = Chem.MolFromSmiles(smi)
         if mol is None:
-            key = f"unparseable:{smi}"
-        else:
-            scaffold = MurckoScaffold.MurckoScaffoldSmiles(mol=mol, includeChirality=False)
-            # Keyed by canonical SMILES so true duplicates still share a group —
-            # the same molecule either side of the split is leakage, not diversity.
-            key = scaffold or f"acyclic:{Chem.MolToSmiles(mol)}"
+            # featurize() already drops these, so this only fires on raw input.
+            # Pin them to train: a molecule with no features cannot be predicted,
+            # so letting it reach test would corrupt the metric.
+            unparseable.append(i)
+            continue
+        scaffold = MurckoScaffold.MurckoScaffoldSmiles(mol=mol, includeChirality=False)
+        # Keyed by canonical SMILES so true duplicates still share a group —
+        # the same molecule either side of the split is leakage, not diversity.
+        key = scaffold or f"acyclic:{Chem.MolToSmiles(mol)}"
         scaffold_to_indices.setdefault(key, []).append(i)
+
+    if unparseable:
+        logger.warning(
+            "%d unparseable SMILES forced into train (first index %d) — featurize() "
+            "normally drops these",
+            len(unparseable),
+            unparseable[0],
+        )
 
     # Shuffle, then stable-sort by size: random order within each size band,
     # deterministic given random_state. Without the shuffle, ties are broken by
@@ -131,8 +143,11 @@ def scaffold_split(
         labels = y.astype(int)
     else:
         labels = _quantile_bins(y, stratify_bins)
-    unique_labels, label_counts = np.unique(labels, return_counts=True)
-    shares = {int(c): int(n) / len(smiles) for c, n in zip(unique_labels, label_counts)}
+    # Shares come from the splittable rows only — a stratum whose molecules are
+    # all unparseable can never reach test, and should not be given a quota.
+    splittable = [i for g in scaffold_to_indices.values() for i in g]
+    unique_labels, label_counts = np.unique(labels[splittable], return_counts=True)
+    shares = {int(c): int(n) / len(splittable) for c, n in zip(unique_labels, label_counts)}
 
     # Floor of 1 so a stratum too rare to earn a proportional slot still reaches test.
     class_target = {cls: max(1, round(n_test_target * share)) for cls, share in shares.items()}
@@ -172,7 +187,7 @@ def scaffold_split(
             else:
                 rejected.add(gi)
 
-    train_idx = [i for gi, g in enumerate(groups) if not taken[gi] for i in g]
+    train_idx = unparseable + [i for gi, g in enumerate(groups) if not taken[gi] for i in g]
     skipped = [len(groups[gi]) for gi in sorted(rejected)]
 
     if not test_idx:
@@ -214,7 +229,8 @@ def scaffold_split(
         len(train_idx),
         len(test_idx),
         100 * realized,
-        len({index_to_scaffold[i] for i in train_idx}),
+        # Unparseable rows have no scaffold, so they are not counted here.
+        len({index_to_scaffold[i] for i in train_idx if i in index_to_scaffold}),
         len({index_to_scaffold[i] for i in test_idx}),
     )
     if abs(realized - test_size) > tolerance:
