@@ -20,8 +20,9 @@ MIN_ROWS: dict[Endpoint, int] = {
     Endpoint.SOLUBILITY: 5000,
     Endpoint.LIPOPHILICITY: 2000,
     Endpoint.CYP3A4: 5000,
+    Endpoint.HLM: 3000,
     Endpoint.CLEARANCE: 500,
-    Endpoint.HERG: 300,
+    Endpoint.HERG: 8000,
 }
 
 REGRESSION_BOUNDS: dict[Endpoint, tuple[float, float]] = {

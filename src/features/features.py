@@ -71,10 +71,10 @@ def _quantile_bins(y: np.ndarray, n_bins: int) -> np.ndarray:
 def scaffold_split(
     smiles: list[str],
     test_size: float = 0.2,
-    y: np.ndarray | None = None,
     tolerance: float = 0.02,
-    random_state: int = 0,
+    y: np.ndarray | None = None,
     stratify_bins: int | None = None,
+    random_state: int = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Split by Murcko scaffold — no scaffold appears in both train and test.
 
