@@ -8,6 +8,8 @@ Run: python -m src.models.predict
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
+from math import nan
 
 import numpy as np
 import pandas as pd
@@ -31,6 +33,10 @@ LOG_TRANSFORM: set[Endpoint] = {Endpoint.CLEARANCE}
 # Quantile bins used to stratify regression splits. Quantile bins are invariant
 # to monotonic transforms, so binning raw y matches binning the log-transformed y.
 STRATIFY_BINS = 5
+
+# Split seeds to average over. Which equal-sized scaffold groups reach test is
+# seed-dependent, so one split is a sample, not an estimate.
+SPLIT_SEEDS: tuple[int, ...] = (0, 1, 2, 3, 4)
 
 _LGBM_BASE: dict = dict(
     n_estimators=500,
@@ -71,15 +77,18 @@ def _auprc(y_true: np.ndarray, y_prob: np.ndarray) -> float:
     return float(auc(recall, precision))
 
 
-def run_endpoint(endpoint: Endpoint) -> dict[str, float]:
-    logger.info("--- %s ---", endpoint)
-    df = pd.read_parquet(RAW / f"{endpoint}.parquet")
-    X, y, smiles = _load_or_featurize(endpoint, df)
-
+def _run_one_split(
+    endpoint: Endpoint,
+    X: np.ndarray,
+    y: np.ndarray,
+    smiles: list[str],
+    seed: int,
+) -> dict[str, float]:
     task = ENDPOINT_TASK[endpoint]
     train_idx, test_idx = scaffold_split(
         smiles,
         y=y,
+        random_state=seed,
         stratify_bins=None if task == Task.CLASSIFICATION else STRATIFY_BINS,
     )
     X_train, X_test = X[train_idx], X[test_idx]
@@ -95,27 +104,52 @@ def run_endpoint(endpoint: Endpoint) -> dict[str, float]:
             y_pred = np.expm1(y_pred)
         rmse = float(mean_squared_error(y_test, y_pred) ** 0.5)
         r2 = float(r2_score(y_test, y_pred))
-        logger.info("RMSE: %.4f   R²: %.4f", rmse, r2)
+        logger.info("seed %d — RMSE: %.4f   R²: %.4f", seed, rmse, r2)
         return {"rmse": rmse, "r2": r2}
-    else:
-        classifier = LGBMClassifier(**_LGBM_BASE)
-        classifier.fit(X_train, y_train)
-        y_prob = np.asarray(classifier.predict_proba(X_test))[:, 1]
-        roc = float(roc_auc_score(y_test, y_prob))
-        prc = _auprc(y_test, y_prob)
-        logger.info("ROC-AUC: %.4f   AUPRC: %.4f", roc, prc)
-        return {"roc_auc": roc, "auprc": prc}
+
+    classifier = LGBMClassifier(**_LGBM_BASE)
+    classifier.fit(X_train, y_train)
+    y_prob = np.asarray(classifier.predict_proba(X_test))[:, 1]
+    roc = float(roc_auc_score(y_test, y_prob))
+    prc = _auprc(y_test, y_prob)
+    logger.info("seed %d — ROC-AUC: %.4f   AUPRC: %.4f", seed, roc, prc)
+    return {"roc_auc": roc, "auprc": prc}
+
+
+def run_endpoint(
+    endpoint: Endpoint, seeds: Sequence[int] = SPLIT_SEEDS
+) -> dict[str, tuple[float, float]]:
+    """Evaluate one endpoint over several split seeds.
+
+    Returns {metric: (mean, sd)}. Reseeding decides which equal-sized scaffold
+    groups land in test, which moves the metrics by more than most changes being
+    measured — so a single split is not a usable estimate. sd is nan for one seed.
+    """
+    logger.info("--- %s ---", endpoint)
+    df = pd.read_parquet(RAW / f"{endpoint}.parquet")
+    X, y, smiles = _load_or_featurize(endpoint, df)
+
+    per_seed = [_run_one_split(endpoint, X, y, smiles, seed) for seed in seeds]
+    return {
+        metric: (
+            float(np.mean([r[metric] for r in per_seed])),
+            float(np.std([r[metric] for r in per_seed], ddof=1)) if len(per_seed) > 1 else nan,
+        )
+        for metric in per_seed[0]
+    }
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    results: dict[str, dict[str, float]] = {}
+    results: dict[str, dict[str, tuple[float, float]]] = {}
     for endpoint in Endpoint:
         results[str(endpoint)] = run_endpoint(endpoint)
 
-    logger.info("\n=== SUMMARY ===")
+    logger.info("\n=== SUMMARY (mean ± sd over %d split seeds) ===", len(SPLIT_SEEDS))
     for name, metrics in results.items():
-        metric_str = "   ".join(f"{k}: {v:.4f}" for k, v in metrics.items())
+        metric_str = "   ".join(
+            f"{k}: {mean:.4f} ± {sd:.4f}" for k, (mean, sd) in metrics.items()
+        )
         logger.info("%-40s %s", name, metric_str)
 
 

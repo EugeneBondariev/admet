@@ -22,7 +22,7 @@ help:
 	@echo "  validate         Re-validate all data files on disk"
 	@echo ""
 	@echo "Model:"
-	@echo "  predict          Train + evaluate all endpoints"
+	@echo "  predict          Train + evaluate all endpoints (mean +/- sd over 5 split seeds)"
 	@echo ""
 
 install:
