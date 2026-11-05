@@ -142,7 +142,7 @@ def main() -> None:
         mlflow.log_params({**_LGBM_BASE, "split_seeds": list(SPLIT_SEEDS)})
         for endpoint in Endpoint:
             metrics = run_endpoint(endpoint)
-            results[str(endpoint)] = metrics
+            results[endpoint] = metrics
             for name, (mean, sd) in metrics.items():
                 # sd is logged alongside the mean: a mean without its spread
                 # invites reading noise as signal when comparing runs.

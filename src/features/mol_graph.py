@@ -60,7 +60,7 @@ def build_dataset(df: pd.DataFrame) -> tuple[list[Data], list[str]]:
     smiles_out: list[str] = []
     n_failed = 0
     for smi, label in zip(df["Drug"], df["Y"]):
-        g = smiles_to_graph(smiles=str(smi), y=float(label))
+        g = smiles_to_graph(smiles=smi, y=label)
         if g is None:
             n_failed += 1
         else:
@@ -85,9 +85,9 @@ def load_or_build_dataset(
                 cache,
             )
         logger.info("Loading cached graphs for %s", endpoint)
-        saved = torch.load(str(cache), weights_only=False)
+        saved = torch.load(cache, weights_only=False)
         return saved["graphs"], saved["smiles"]
     graphs, smiles = build_dataset(df)
-    torch.save({"graphs": graphs, "smiles": smiles}, str(cache))
+    torch.save({"graphs": graphs, "smiles": smiles}, cache)
     logger.info("Cached %d graphs → %s", len(graphs), cache.name)
     return graphs, smiles

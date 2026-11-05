@@ -21,7 +21,7 @@ class Endpoint(StrEnum):
     HERG = "herg_karim"
 
 
-ENDPOINT_TDC_GROUP: dict[str, TDCGroup] = {
+ENDPOINT_TDC_GROUP: dict[Endpoint, TDCGroup] = {
     Endpoint.SOLUBILITY: TDCGroup.ADME,
     Endpoint.LIPOPHILICITY: TDCGroup.ADME,
     Endpoint.CYP3A4: TDCGroup.ADME,

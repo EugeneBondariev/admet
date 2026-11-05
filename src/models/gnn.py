@@ -251,7 +251,7 @@ def main() -> None:
         )
         for endpoint in endpoints:
             metrics = run_gnn_endpoint(endpoint=endpoint, max_epochs=args.epochs)
-            results[str(endpoint)] = metrics
+            results[endpoint] = metrics
             for k, v in metrics.items():
                 mlflow.log_metric(key=f"{endpoint}.gnn.{k}", value=v)
 
