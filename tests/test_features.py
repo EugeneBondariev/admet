@@ -13,7 +13,7 @@ import pytest
 from rdkit import Chem
 from rdkit.Chem.Scaffolds import MurckoScaffold
 
-from src.features.features import FP_BITS, featurize, scaffold_split
+from src.features.features import FP_BITS, _quantile_bins, featurize, scaffold_split
 
 # Four unrelated cores; alkyl chains of increasing length give distinct
 # molecules that all reduce to the same Murcko scaffold.
@@ -31,6 +31,11 @@ def _series(core: str, n: int) -> list[str]:
 def _singletons(n: int) -> list[str]:
     """n molecules with n distinct scaffolds — cycloalkanes of increasing ring size."""
     return ["C1" + "C" * (size - 1) + "1" for size in range(3, 3 + n)]
+
+
+def _ring_series(ring_size: int, n: int) -> list[str]:
+    """n analogs sharing one cycloalkane scaffold of the given ring size."""
+    return ["C" * (i + 1) + "C1" + "C" * (ring_size - 1) + "1" for i in range(n)]
 
 
 def _acyclics(n: int) -> list[str]:
@@ -213,8 +218,37 @@ def test_raises_when_a_class_cannot_reach_the_test_set() -> None:
     smiles = _singletons(30) + _series(BENZENE, 60)
     y = np.array([0.0] * 30 + [1.0] * 60, dtype=np.float32)
 
-    with pytest.raises(ValueError, match=r"Class\(es\) \[1\] absent from the test set"):
+    with pytest.raises(ValueError, match=r"No test molecules for class \[1\]"):
         scaffold_split(smiles, y=y)
+
+
+def test_regression_split_covers_the_whole_label_range() -> None:
+    # Low labels sit in singleton scaffolds and high labels only in pairs, so
+    # rare-first filling reaches the bottom of the range and never the top —
+    # exactly the train/test value skew that stratification exists to stop.
+    smiles = _singletons(36) + [s for size in range(39, 46) for s in _ring_series(size, 2)]
+    y = np.arange(50, dtype=np.float32)
+    assert len(smiles) == 50
+
+    _, unstratified = scaffold_split(smiles)
+    _, stratified = scaffold_split(smiles, y=y, stratify_bins=5)
+
+    bins = _quantile_bins(y, 5)
+    assert set(bins[stratified]) == set(bins)
+    assert set(bins[unstratified]) != set(bins)
+
+
+def test_regression_split_handles_heavily_tied_labels() -> None:
+    # Clearance is clipped at 3 and 150, so most labels tie and the quantile
+    # edges collapse. Fewer, uneven bins is fine; empty strata would not be.
+    smiles = _singletons(60) + _series(BENZENE, 40)
+    y = np.array([3.0] * 50 + [150.0] * 50, dtype=np.float32)
+
+    train_idx, test_idx = scaffold_split(smiles, y=y, stratify_bins=5)
+
+    assert len(np.unique(_quantile_bins(y, 5))) < 5
+    assert set(np.unique(y[test_idx])) == {3.0, 150.0}
+    assert set(np.unique(y[train_idx])) == {3.0, 150.0}
 
 
 def test_featurize_returns_aligned_x_y_and_smiles() -> None:

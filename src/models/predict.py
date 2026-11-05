@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 LOG_TRANSFORM: set[Endpoint] = {Endpoint.CLEARANCE}
 
+# Quantile bins used to stratify regression splits. Quantile bins are invariant
+# to monotonic transforms, so binning raw y matches binning the log-transformed y.
+STRATIFY_BINS = 5
+
 _LGBM_BASE: dict = dict(
     n_estimators=500,
     learning_rate=0.05,
@@ -74,7 +78,9 @@ def run_endpoint(endpoint: Endpoint) -> dict[str, float]:
 
     task = ENDPOINT_TASK[endpoint]
     train_idx, test_idx = scaffold_split(
-        smiles, y=y if task == Task.CLASSIFICATION else None
+        smiles,
+        y=y,
+        stratify_bins=None if task == Task.CLASSIFICATION else STRATIFY_BINS,
     )
     X_train, X_test = X[train_idx], X[test_idx]
     y_train, y_test = y[train_idx], y[test_idx]

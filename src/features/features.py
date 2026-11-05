@@ -58,12 +58,23 @@ def featurize(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, list[str]]:
     return np.vstack(rows), np.array(labels, dtype=np.float32), smiles_out
 
 
+def _quantile_bins(y: np.ndarray, n_bins: int) -> np.ndarray:
+    """Cut continuous labels into n_bins roughly equal-count quantile bins.
+
+    Duplicate edges are collapsed, so a label with many tied values — Clearance
+    is clipped at 3 and 150 — yields fewer, uneven bins rather than empty ones.
+    """
+    edges = np.unique(np.quantile(y, np.linspace(0.0, 1.0, n_bins + 1)[1:-1]))
+    return np.searchsorted(edges, y, side="right").astype(int)
+
+
 def scaffold_split(
     smiles: list[str],
     test_size: float = 0.2,
     y: np.ndarray | None = None,
     tolerance: float = 0.02,
     random_state: int = 0,
+    stratify_bins: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Split by Murcko scaffold — no scaffold appears in both train and test.
 
@@ -79,12 +90,16 @@ def scaffold_split(
     individually rather than pooled under one empty scaffold: acyclic molecules
     share no chemical core, and pooling them makes a large inseparable block
     that never reaches test (29.5% of AqSolDB, and the soluble end of it).
-    If y is provided, each class gets its own share of the test set in proportion
-    to the full dataset, so a classification test set mirrors the dataset's class
-    balance instead of whatever the rarest scaffolds happen to carry. Without this,
-    an imbalanced endpoint like hERG fills test almost entirely with one class and
-    its ROC-AUC / AUPRC become uninterpretable. Raises ValueError if a class cannot
-    reach the test set because every scaffold group carrying it is too large.
+    If y is provided, each label stratum gets its own share of the test set in
+    proportion to the full dataset, so test mirrors the real label distribution
+    instead of whatever the rarest scaffolds happen to carry. With
+    stratify_bins=None y is read as discrete classes (classification); with an
+    int, y is continuous and is cut into that many quantile bins (regression).
+    Both need it: hERG's test set otherwise fills almost entirely with one class
+    and its ROC-AUC / AUPRC stop meaning anything, while scaffold and label
+    correlate for regression too, so test can drift to one end of the range.
+    Raises ValueError if a stratum cannot reach test because every scaffold group
+    carrying it is too large.
     """
     scaffold_to_indices: dict[str, list[int]] = {}
     for i, smi in enumerate(smiles):
@@ -108,16 +123,21 @@ def scaffold_split(
     n_test_target = int(len(smiles) * test_size)
     n_test_cap = int(len(smiles) * (test_size + tolerance))
 
-    # Per-class size quotas. With y=None this collapses to one pseudo-class and
-    # the quotas reduce to the plain size target/cap, so regression is unchanged.
-    labels = np.zeros(len(smiles), dtype=int) if y is None else y.astype(int)
+    # Per-stratum size quotas. With y=None this collapses to one pseudo-stratum
+    # and the quotas reduce to the plain size target and cap.
+    if y is None:
+        labels = np.zeros(len(smiles), dtype=int)
+    elif stratify_bins is None:
+        labels = y.astype(int)
+    else:
+        labels = _quantile_bins(y, stratify_bins)
     unique_labels, label_counts = np.unique(labels, return_counts=True)
     shares = {int(c): int(n) / len(smiles) for c, n in zip(unique_labels, label_counts)}
 
-    # Floor of 1 so a class too rare to earn a proportional slot still reaches test.
+    # Floor of 1 so a stratum too rare to earn a proportional slot still reaches test.
     class_target = {cls: max(1, round(n_test_target * share)) for cls, share in shares.items()}
-    # Each cap leaves room for every other class's target, so the majority class
-    # cannot consume the whole test budget before a rare class gets in.
+    # Each cap leaves room for every other stratum's target, so a common stratum
+    # cannot consume the whole test budget before a rare one gets in.
     class_cap: dict[int, int] = {}
     for cls, share in shares.items():
         reserved = sum(t for c, t in class_target.items() if c != cls)
@@ -126,22 +146,34 @@ def scaffold_split(
         )
 
     test_idx: list[int] = []
-    train_idx: list[int] = []
-    skipped: list[int] = []
     test_counts: Counter[int] = Counter()
+    counts_per_group = [Counter(int(labels[i]) for i in g) for g in groups]
+    taken = [False] * len(groups)
+    rejected: set[int] = set()
 
-    for group in groups:
-        group_counts = Counter(int(labels[i]) for i in group)
-        if all(test_counts[c] >= target for c, target in class_target.items()):
-            train_idx.extend(group)
-        elif len(test_idx) + len(group) <= n_test_cap and all(
-            test_counts[c] + n <= class_cap[c] for c, n in group_counts.items()
-        ):
-            test_idx.extend(group)
-            test_counts.update(group_counts)
-        else:
-            skipped.append(len(group))
-            train_idx.extend(group)
+    # Pass 1 admits a group only while it keeps every stratum at or under target,
+    # which reserves each stratum's slots before the budget is spent. Pass 2 then
+    # tops test up toward the overall target, now allowing growth up to each cap.
+    # One pass alone fails whichever stratum only occurs in chunky groups.
+    for limits in (class_target, class_cap):
+        for gi, group in enumerate(groups):
+            if all(test_counts[c] >= t for c, t in class_target.items()):
+                break
+            if taken[gi]:
+                continue
+            group_counts = counts_per_group[gi]
+            if len(test_idx) + len(group) <= n_test_cap and all(
+                test_counts[c] + n <= limits[c] for c, n in group_counts.items()
+            ):
+                test_idx.extend(group)
+                test_counts.update(group_counts)
+                taken[gi] = True
+                rejected.discard(gi)
+            else:
+                rejected.add(gi)
+
+    train_idx = [i for gi, g in enumerate(groups) if not taken[gi] for i in g]
+    skipped = [len(groups[gi]) for gi in sorted(rejected)]
 
     if not test_idx:
         raise ValueError(
@@ -160,15 +192,17 @@ def scaffold_split(
         )
 
     if y is not None:
+        kind = "label bin" if stratify_bins is not None else "class"
         missing = sorted(cls for cls in class_target if test_counts[cls] == 0)
         if missing:
             raise ValueError(
-                f"Class(es) {missing} absent from the test set — every scaffold group "
-                f"carrying them is larger than that class's share of a "
+                f"No test molecules for {kind} {missing} — every scaffold group carrying "
+                f"them is larger than that {kind}'s share of a "
                 f"{100 * (test_size + tolerance):.0f}% test set; raise tolerance or test_size"
             )
         logger.info(
-            "Test class balance: %s (dataset: %s)",
+            "Test %s balance: %s (dataset: %s)",
+            kind,
             dict(sorted(test_counts.items())),
             dict(sorted(Counter(int(c) for c in labels).items())),
         )
