@@ -13,6 +13,7 @@ import logging
 from tdc.single_pred import ADME, Tox
 
 from src.constants import ENDPOINT_TDC_GROUP, Endpoint, TDCGroup
+from src.data.validate_data import is_valid_smiles
 from src.paths import INTERIM, RAW
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,12 @@ def fetch_endpoint(endpoint: Endpoint, force: bool = False) -> None:
     # path=RAW keeps TDC's .tab download in data/raw/ instead of ./data, which
     # it defaults to — that default is relative to the shell's cwd, not the project.
     df = cls(name=endpoint, path=str(RAW)).get_data()
+    df["Drug"] = df["Drug"].astype(str)
+    df["Y"] = df["Y"].astype(float)
+    before = len(df)
+    df = df[df["Drug"].apply(is_valid_smiles)].reset_index(drop=True)
+    if dropped := before - len(df):
+        logger.warning("  Dropped %d rows with unparseable SMILES", dropped)
     df.to_parquet(out, index=False)
     logger.info("  %d rows -> %s", len(df), out.name)
 

@@ -49,7 +49,7 @@ def load_or_featurize(
         data = np.load(cache)
         return data["X"], data["y"], list(data["smiles"])
     X, y, smiles = featurize(df)
-    np.savez_compressed(str(cache), X=X, y=y, smiles=np.array(smiles))
+    np.savez_compressed(cache, X=X, y=y, smiles=np.array(smiles))
     logger.info("Cached features → %s", cache.name)
     return X, y, smiles
 
@@ -63,23 +63,9 @@ def _mol_to_features(mol: Chem.Mol) -> np.ndarray:
 
 
 def featurize(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    """Return X, y, smiles for valid rows. Drops rows with unparseable SMILES."""
-    rows, labels, smiles_out = [], [], []
-    n_dropped = 0
-    for smi, label in zip(df["Drug"], df["Y"]):
-        mol = Chem.MolFromSmiles(str(smi))
-        if mol is None:
-            n_dropped += 1
-            continue
-        rows.append(_mol_to_features(mol))
-        labels.append(float(label))
-        smiles_out.append(str(smi))
-
-    if n_dropped:
-        logger.warning("Dropped %d rows with unparseable SMILES", n_dropped)
+    rows = [_mol_to_features(Chem.MolFromSmiles(smi)) for smi in df["Drug"]]
     logger.info("Featurized %d molecules (%d features)", len(rows), len(FEATURE_NAMES))
-
-    return np.vstack(rows), np.array(labels, dtype=np.float32), smiles_out
+    return np.vstack(rows), df["Y"].to_numpy(dtype=np.float32), list(df["Drug"])
 
 
 def _quantile_bins(y: np.ndarray, n_bins: int) -> np.ndarray:

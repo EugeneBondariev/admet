@@ -16,6 +16,11 @@ from src.paths import INTERIM
 
 logger = logging.getLogger(__name__)
 
+
+def is_valid_smiles(smiles: str) -> bool:
+    return Chem.MolFromSmiles(smiles) is not None
+
+
 MIN_ROWS: dict[Endpoint, int] = {
     Endpoint.SOLUBILITY: 5000,
     Endpoint.LIPOPHILICITY: 2000,
@@ -30,11 +35,6 @@ REGRESSION_BOUNDS: dict[Endpoint, tuple[float, float]] = {
     Endpoint.LIPOPHILICITY: (-5.0, 10.0),     # logD range
     Endpoint.CLEARANCE: (0.0, 5000.0),        # mL/min/kg
 }
-
-
-def _check_smiles(smiles: pd.Series) -> int:
-    """Return count of unparseable SMILES strings."""
-    return sum(1 for s in smiles if Chem.MolFromSmiles(str(s)) is None)
 
 
 def validate_endpoint(endpoint: Endpoint) -> bool:
@@ -67,9 +67,10 @@ def validate_endpoint(endpoint: Endpoint) -> bool:
         logger.error("[%s] only %d rows (expected >=%d)", endpoint, len(df), MIN_ROWS[endpoint])
         ok = False
 
-    bad_smiles = _check_smiles(df["Drug"])
+    bad_smiles = (~df["Drug"].apply(is_valid_smiles)).sum()
     if bad_smiles:
-        logger.warning("[%s] %d unparseable SMILES (will be dropped in featurization)", endpoint, bad_smiles)
+        logger.error("[%s] %d unparseable SMILES — fetch_data should have removed these", endpoint, bad_smiles)
+        ok = False
 
     task = ENDPOINT_TASK[endpoint]
     if task == Task.CLASSIFICATION:

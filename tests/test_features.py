@@ -276,15 +276,6 @@ def test_featurize_returns_aligned_x_y_and_smiles() -> None:
     assert smiles_out == smiles
 
 
-def test_featurize_drops_unparseable_smiles_and_keeps_labels_aligned() -> None:
-    df = pd.DataFrame({"Drug": ["CCO", "notamolecule", "c1ccccc1"], "Y": [1.0, 2.0, 3.0]})
-
-    X, y, smiles_out = featurize(df)
-
-    assert X.shape[0] == 2
-    assert np.array_equal(y, np.array([1.0, 3.0], dtype=np.float32))
-    assert smiles_out == ["CCO", "c1ccccc1"]
-
 
 def test_featurize_fingerprint_block_is_binary() -> None:
     df = pd.DataFrame({"Drug": ["CC(=O)Oc1ccccc1C(=O)O"], "Y": [0.0]})
