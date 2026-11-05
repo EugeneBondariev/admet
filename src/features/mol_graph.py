@@ -59,9 +59,8 @@ def build_dataset(df: pd.DataFrame) -> tuple[list[Data], list[str]]:
     graphs: list[Data] = []
     smiles_out: list[str] = []
     n_failed = 0
-    for _, row in df.iterrows():
-        smi = str(row["Drug"])
-        g = smiles_to_graph(smiles=smi, y=float(row["Y"]))
+    for smi, label in zip(df["Drug"], df["Y"]):
+        g = smiles_to_graph(smiles=str(smi), y=float(label))
         if g is None:
             n_failed += 1
         else:

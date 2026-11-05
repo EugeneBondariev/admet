@@ -66,14 +66,14 @@ def featurize(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """Return X, y, smiles for valid rows. Drops rows with unparseable SMILES."""
     rows, labels, smiles_out = [], [], []
     n_dropped = 0
-    for _, row in df.iterrows():
-        mol = Chem.MolFromSmiles(str(row["Drug"]))
+    for smi, label in zip(df["Drug"], df["Y"]):
+        mol = Chem.MolFromSmiles(str(smi))
         if mol is None:
             n_dropped += 1
             continue
         rows.append(_mol_to_features(mol))
-        labels.append(float(row["Y"]))
-        smiles_out.append(str(row["Drug"]))
+        labels.append(float(label))
+        smiles_out.append(str(smi))
 
     if n_dropped:
         logger.warning("Dropped %d rows with unparseable SMILES", n_dropped)
