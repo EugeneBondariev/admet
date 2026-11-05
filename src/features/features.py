@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import logging
 import warnings
+from collections import Counter
+from math import ceil
 
 import numpy as np
 import pandas as pd
@@ -70,8 +72,12 @@ def scaffold_split(
     test_size by luck; a group is skipped (left in train) if adding it would
     push test past test_size + tolerance, keeping the realized split close
     enough to compare metrics across endpoints and against TDC.
-    If y is provided, ensures all classes appear in the test set (important for
-    small classification datasets like hERG).
+    If y is provided, each class gets its own share of the test set in proportion
+    to the full dataset, so a classification test set mirrors the dataset's class
+    balance instead of whatever the rarest scaffolds happen to carry. Without this,
+    an imbalanced endpoint like hERG fills test almost entirely with one class and
+    its ROC-AUC / AUPRC become uninterpretable. Raises ValueError if a class cannot
+    reach the test set because every scaffold group carrying it is too large.
     """
     scaffold_to_indices: dict[str, list[int]] = {}
     for i, smi in enumerate(smiles):
@@ -86,15 +92,38 @@ def scaffold_split(
     groups = sorted(scaffold_to_indices.values(), key=len)
     n_test_target = int(len(smiles) * test_size)
     n_test_cap = int(len(smiles) * (test_size + tolerance))
+
+    # Per-class size quotas. With y=None this collapses to one pseudo-class and
+    # the quotas reduce to the plain size target/cap, so regression is unchanged.
+    labels = np.zeros(len(smiles), dtype=int) if y is None else y.astype(int)
+    unique_labels, label_counts = np.unique(labels, return_counts=True)
+    shares = {int(c): int(n) / len(smiles) for c, n in zip(unique_labels, label_counts)}
+
+    # Floor of 1 so a class too rare to earn a proportional slot still reaches test.
+    class_target = {cls: max(1, round(n_test_target * share)) for cls, share in shares.items()}
+    # Each cap leaves room for every other class's target, so the majority class
+    # cannot consume the whole test budget before a rare class gets in.
+    class_cap: dict[int, int] = {}
+    for cls, share in shares.items():
+        reserved = sum(t for c, t in class_target.items() if c != cls)
+        class_cap[cls] = max(
+            class_target[cls], min(ceil(n_test_cap * share), n_test_cap - reserved)
+        )
+
     test_idx: list[int] = []
     train_idx: list[int] = []
     skipped: list[int] = []
+    test_counts: Counter[int] = Counter()
 
     for group in groups:
-        if len(test_idx) >= n_test_target:
+        group_counts = Counter(int(labels[i]) for i in group)
+        if all(test_counts[c] >= target for c, target in class_target.items()):
             train_idx.extend(group)
-        elif len(test_idx) + len(group) <= n_test_cap:
+        elif len(test_idx) + len(group) <= n_test_cap and all(
+            test_counts[c] + n <= class_cap[c] for c, n in group_counts.items()
+        ):
             test_idx.extend(group)
+            test_counts.update(group_counts)
         else:
             skipped.append(len(group))
             train_idx.extend(group)
@@ -109,27 +138,25 @@ def scaffold_split(
     if skipped:
         logger.info(
             "Left %d scaffold group(s) in train (largest %d molecules) — would have pushed "
-            "test past %.0f%%",
+            "test, or one class's share of it, past %.0f%%",
             len(skipped),
             max(skipped),
             100 * (test_size + tolerance),
         )
 
     if y is not None:
-        train_set = set(train_idx)
-        test_set = set(test_idx)
-        missing_classes = set(np.unique(y).astype(int)) - set(y[list(test_set)].astype(int))
-        if missing_classes:
-            logger.warning("Test set missing classes %s — moving scaffolds to fix", missing_classes)
-            for cls in missing_classes:
-                for indices in scaffold_to_indices.values():
-                    if any(int(y[i]) == cls for i in indices if i in train_set):
-                        for i in indices:
-                            train_set.discard(i)
-                            test_set.add(i)
-                        break
-        train_idx = list(train_set)
-        test_idx = list(test_set)
+        missing = sorted(cls for cls in class_target if test_counts[cls] == 0)
+        if missing:
+            raise ValueError(
+                f"Class(es) {missing} absent from the test set — every scaffold group "
+                f"carrying them is larger than that class's share of a "
+                f"{100 * (test_size + tolerance):.0f}% test set; raise tolerance or test_size"
+            )
+        logger.info(
+            "Test class balance: %s (dataset: %s)",
+            dict(sorted(test_counts.items())),
+            dict(sorted(Counter(int(c) for c in labels).items())),
+        )
 
     index_to_scaffold = {i: s for s, indices in scaffold_to_indices.items() for i in indices}
     realized = len(test_idx) / len(smiles)

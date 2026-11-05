@@ -119,19 +119,53 @@ def test_raises_when_no_scaffold_group_is_small_enough() -> None:
         scaffold_split(smiles)
 
 
-def test_classification_split_forces_every_class_into_test() -> None:
-    # All singletons are negative and the whole positive class sits in one
-    # series, which rare-first filling would leave entirely in train.
-    smiles = _singletons(30) + _series(BENZENE, 60)
+def test_classification_split_puts_both_classes_in_train_and_test() -> None:
+    smiles = _singletons(30) + _series(BENZENE, 50) + _series(NAPHTHALENE, 10)
     y = np.array([0.0] * 30 + [1.0] * 60, dtype=np.float32)
 
     train_idx, test_idx = scaffold_split(smiles, y=y)
 
     assert set(np.unique(y[test_idx])) == {0.0, 1.0}
-    # The repair moves whole scaffold groups, so the core invariant must survive.
+    assert set(np.unique(y[train_idx])) == {0.0, 1.0}
+    # Per-class quotas still move whole groups, so the core invariant must survive.
     assert set(train_idx).isdisjoint(set(test_idx))
     train_scaffolds = _scaffolds([smiles[i] for i in train_idx])
     assert train_scaffolds.isdisjoint(_scaffolds([smiles[i] for i in test_idx]))
+
+
+def test_test_set_mirrors_the_dataset_class_balance() -> None:
+    # The rarest scaffolds are overwhelmingly positive, so a class-blind
+    # rare-first fill would hand test ~22 positives and no negatives at all.
+    smiles = _singletons(60) + _series(BENZENE, 40)
+    y = np.array([1.0] * 40 + [0.0] * 20 + [1.0] * 40, dtype=np.float32)
+    assert y.mean() == 0.8
+
+    _, test_idx = scaffold_split(smiles, y=y)
+
+    assert 0.0 in np.unique(y[test_idx])
+    assert abs(y[test_idx].mean() - y.mean()) < 0.1
+
+
+def test_rare_class_is_not_squeezed_out_by_rounding() -> None:
+    # 3 negatives in 100 molecules: a proportional quota rounds to zero, so the
+    # floor of one molecule per class is what keeps them in test at all.
+    smiles = _singletons(60) + _series(BENZENE, 40)
+    y = np.array([1.0] * 57 + [0.0] * 3 + [1.0] * 40, dtype=np.float32)
+
+    train_idx, test_idx = scaffold_split(smiles, y=y)
+
+    assert 0.0 in np.unique(y[test_idx])
+    assert 0.0 in np.unique(y[train_idx])
+
+
+def test_raises_when_a_class_cannot_reach_the_test_set() -> None:
+    # Every positive sits in one 60-molecule series, far past any class's share
+    # of a 22% test set, so no split can give test a positive.
+    smiles = _singletons(30) + _series(BENZENE, 60)
+    y = np.array([0.0] * 30 + [1.0] * 60, dtype=np.float32)
+
+    with pytest.raises(ValueError, match=r"Class\(es\) \[1\] absent from the test set"):
+        scaffold_split(smiles, y=y)
 
 
 def test_featurize_returns_aligned_x_y_and_smiles() -> None:
