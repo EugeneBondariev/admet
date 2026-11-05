@@ -33,6 +33,11 @@ def _singletons(n: int) -> list[str]:
     return ["C1" + "C" * (size - 1) + "1" for size in range(3, 3 + n)]
 
 
+def _acyclics(n: int) -> list[str]:
+    """n distinct molecules with no ring system — straight-chain alkanes."""
+    return ["C" * (i + 1) for i in range(n)]
+
+
 def _scaffolds(smiles: list[str]) -> set[str]:
     return {
         MurckoScaffold.MurckoScaffoldSmiles(mol=Chem.MolFromSmiles(smi), includeChirality=False)
@@ -117,6 +122,50 @@ def test_raises_when_no_scaffold_group_is_small_enough() -> None:
 
     with pytest.raises(ValueError, match="No scaffold group fits"):
         scaffold_split(smiles)
+
+
+def test_acyclic_molecules_are_not_pooled_into_one_block() -> None:
+    # Pooled under a single empty scaffold these were one group far too large to
+    # ever reach test (29.5% of AqSolDB). Keyed individually they are ordinary
+    # singletons and land on both sides.
+    smiles = _acyclics(40) + _series(BENZENE, 60)
+
+    train_idx, test_idx = scaffold_split(smiles)
+
+    acyclic = set(range(40))
+    assert acyclic & set(test_idx)
+    assert acyclic & set(train_idx)
+
+
+def test_duplicate_molecules_form_one_inseparable_group() -> None:
+    # 25 copies of ethanol are one group of 25, too big for a 22% test set. Keyed
+    # per row they would be 25 singletons, and test would quietly fill with
+    # copies of a molecule sitting in train — leakage, not diversity.
+    smiles = ["CCO"] * 25 + _series(BENZENE, 75)
+
+    with pytest.raises(ValueError, match="No scaffold group fits"):
+        scaffold_split(smiles)
+
+
+def test_split_is_deterministic_for_a_given_random_state() -> None:
+    smiles = _acyclics(50) + _series(BENZENE, 50)
+
+    first = scaffold_split(smiles, random_state=0)
+    second = scaffold_split(smiles, random_state=0)
+
+    assert np.array_equal(first[0], second[0])
+    assert np.array_equal(first[1], second[1])
+
+
+def test_random_state_decides_which_equal_sized_groups_reach_test() -> None:
+    # 50 singletons compete for 20 test slots; without the shuffle, dataframe
+    # row order alone would pick the winners.
+    smiles = _acyclics(50) + _series(BENZENE, 50)
+
+    _, test_a = scaffold_split(smiles, random_state=0)
+    _, test_b = scaffold_split(smiles, random_state=1)
+
+    assert set(test_a) != set(test_b)
 
 
 def test_classification_split_puts_both_classes_in_train_and_test() -> None:

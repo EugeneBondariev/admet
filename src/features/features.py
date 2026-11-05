@@ -63,15 +63,22 @@ def scaffold_split(
     test_size: float = 0.2,
     y: np.ndarray | None = None,
     tolerance: float = 0.02,
+    random_state: int = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Split by Murcko scaffold — no scaffold appears in both train and test.
 
     Assigns rarest scaffolds (smallest groups) to test first so the test set
     covers diverse chemical space rather than a single dominant series.
+    Equal-sized groups are ordered by a random_state-seeded shuffle, so which
+    of them reaches test does not depend on row order in the dataframe.
     Scaffolds move as whole groups, so the test set can only land on exact
     test_size by luck; a group is skipped (left in train) if adding it would
     push test past test_size + tolerance, keeping the realized split close
     enough to compare metrics across endpoints and against TDC.
+    A molecule with no ring system has no Murcko scaffold. Those are keyed
+    individually rather than pooled under one empty scaffold: acyclic molecules
+    share no chemical core, and pooling them makes a large inseparable block
+    that never reaches test (29.5% of AqSolDB, and the soluble end of it).
     If y is provided, each class gets its own share of the test set in proportion
     to the full dataset, so a classification test set mirrors the dataset's class
     balance instead of whatever the rarest scaffolds happen to carry. Without this,
@@ -82,14 +89,22 @@ def scaffold_split(
     scaffold_to_indices: dict[str, list[int]] = {}
     for i, smi in enumerate(smiles):
         mol = Chem.MolFromSmiles(smi)
-        scaffold = (
-            MurckoScaffold.MurckoScaffoldSmiles(mol=mol, includeChirality=False)
-            if mol is not None
-            else ""
-        )
-        scaffold_to_indices.setdefault(scaffold, []).append(i)
+        if mol is None:
+            key = f"unparseable:{smi}"
+        else:
+            scaffold = MurckoScaffold.MurckoScaffoldSmiles(mol=mol, includeChirality=False)
+            # Keyed by canonical SMILES so true duplicates still share a group —
+            # the same molecule either side of the split is leakage, not diversity.
+            key = scaffold or f"acyclic:{Chem.MolToSmiles(mol)}"
+        scaffold_to_indices.setdefault(key, []).append(i)
 
-    groups = sorted(scaffold_to_indices.values(), key=len)
+    # Shuffle, then stable-sort by size: random order within each size band,
+    # deterministic given random_state. Without the shuffle, ties are broken by
+    # dataframe row order, which decides the split for datasets made mostly of
+    # singleton scaffolds.
+    group_list = list(scaffold_to_indices.values())
+    rng = np.random.default_rng(random_state)
+    groups = sorted((group_list[i] for i in rng.permutation(len(group_list))), key=len)
     n_test_target = int(len(smiles) * test_size)
     n_test_cap = int(len(smiles) * (test_size + tolerance))
 
