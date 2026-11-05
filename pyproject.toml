@@ -21,11 +21,13 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
+# Top-level exclude, not lint.exclude: the latter only silences rules, it does
+# not stop ruff discovering the files, so `ruff check .` still flagged notebooks.
+exclude = ["notebooks/"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
 ignore = ["E501"]
-exclude = ["notebooks/"]
 
 [tool.mypy]
 ignore_missing_imports = true

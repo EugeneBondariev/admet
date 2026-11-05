@@ -1,4 +1,7 @@
-PYTHON = python
+# The venv interpreter directly, so targets work whether or not the venv is
+# activated. Bare `python` picked up the system Python 3.14 (no rdkit) when make
+# ran from an unactivated shell. Override with: make PYTHON=python <target>
+PYTHON ?= .venv/Scripts/python.exe
 export PYTHONUNBUFFERED := 1
 
 .PHONY: help install install-dev freeze push typecheck lint test test-e2e fetch validate predict
@@ -45,7 +48,7 @@ lint:
 	$(PYTHON) -m ruff check .
 
 test:
-	$(PYTHON) -m pytest || [ $$? -eq 5 ]
+	$(PYTHON) -m pytest
 
 test-e2e:
 	$(PYTHON) -m pytest -m e2e
