@@ -16,7 +16,10 @@ from rdkit import Chem, RDLogger
 from rdkit.Chem import Descriptors, rdFingerprintGenerator
 from rdkit.Chem.Scaffolds import MurckoScaffold
 
+from src.paths import INTERIM, PROCESSED
+
 RDLogger.DisableLog("rdApp.warning")
+RDLogger.DisableLog("rdApp.error")
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +31,27 @@ _DESC_FUNCS = Descriptors.descList  # list of (name, callable) pairs
 FEATURE_NAMES: list[str] = (
     [f"fp_{i}" for i in range(FP_BITS)] + [name for name, _ in _DESC_FUNCS]
 )
+
+
+def load_or_featurize(
+    endpoint: str, df: pd.DataFrame
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Load cached features from data/processed/ or featurize and cache."""
+    cache = PROCESSED / f"{endpoint}_features.npz"
+    if cache.exists():
+        if (INTERIM / f"{endpoint}.parquet").stat().st_mtime > cache.stat().st_mtime:
+            logger.warning(
+                "Interim data for %s is newer than feature cache — delete %s to rebuild",
+                endpoint,
+                cache,
+            )
+        logger.info("Loading cached features for %s", endpoint)
+        data = np.load(cache)
+        return data["X"], data["y"], list(data["smiles"])
+    X, y, smiles = featurize(df)
+    np.savez_compressed(str(cache), X=X, y=y, smiles=np.array(smiles))
+    logger.info("Cached features → %s", cache.name)
+    return X, y, smiles
 
 
 def _mol_to_features(mol: Chem.Mol) -> np.ndarray:
