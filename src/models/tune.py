@@ -17,14 +17,17 @@ import optuna
 import pandas as pd
 from lightgbm import LGBMClassifier, LGBMRegressor
 from sklearn.metrics import mean_squared_error, roc_auc_score
+from sklearn.model_selection import StratifiedGroupKFold
 
 from src.constants import ENDPOINT_TASK, LOG_TRANSFORM, Endpoint, Task
-from src.features.features import load_or_featurize, scaffold_split
+from src.features.features import get_scaffold_groups, load_or_featurize, quantile_bins
+from src.logging_config import setup_logging
 from src.paths import CONFIG, INTERIM, MODELS_DIR
 
 logger = logging.getLogger(__name__)
 
 N_TRIALS_DEFAULT = 50
+STRATIFY_BINS = 5
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -73,24 +76,23 @@ def tune_endpoint(endpoint: Endpoint, n_trials: int = N_TRIALS_DEFAULT) -> dict:
 
     task = ENDPOINT_TASK[endpoint]
     log_transform = endpoint in LOG_TRANSFORM
+    groups = get_scaffold_groups(smiles)
+    strat_labels = y.astype(int) if task == Task.CLASSIFICATION else quantile_bins(y, STRATIFY_BINS)
 
-    # Outer split mirrors predict.py — test set never touched
-    train_idx, _ = scaffold_split(
-        smiles=smiles, test_size=0.2, y=y if task == Task.CLASSIFICATION else None
-    )
-    # Inner split: validation carved from train only
-    train_smiles = [smiles[i] for i in train_idx]
-    train_y = y[train_idx]
-    inner_train_idx, val_idx = scaffold_split(
-        smiles=train_smiles,
-        test_size=0.2,
-        y=train_y if task == Task.CLASSIFICATION else None,
-    )
+    # Outer fold: 80% available for search, 20% held out — never touched.
+    outer_gkf = StratifiedGroupKFold(n_splits=5)
+    train_idx, _ = next(iter(outer_gkf.split(X, strat_labels, groups=groups)))
 
-    X_tr = X[train_idx][inner_train_idx]
-    y_tr = y[train_idx][inner_train_idx]
-    X_val = X[train_idx][val_idx]
-    y_val = y[train_idx][val_idx]
+    # Inner fold: scaffold val carved from train only — Optuna optimises on this.
+    inner_groups = [groups[i] for i in train_idx]
+    inner_strat = strat_labels[train_idx]
+    inner_gkf = StratifiedGroupKFold(n_splits=5)
+    inner_tr_rel, val_rel = next(iter(inner_gkf.split(X[train_idx], inner_strat, groups=inner_groups)))
+
+    X_tr = X[train_idx[inner_tr_rel]]
+    y_tr = y[train_idx[inner_tr_rel]]
+    X_val = X[train_idx[val_rel]]
+    y_val = y[train_idx[val_rel]]
     logger.info("Train %d / val %d", len(X_tr), len(X_val))
 
     study = optuna.create_study(direction="minimize")
@@ -121,7 +123,7 @@ def tune_endpoint(endpoint: Endpoint, n_trials: int = N_TRIALS_DEFAULT) -> dict:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    setup_logging()
     parser = argparse.ArgumentParser(description="Tune LightGBM hyperparameters with Optuna")
     parser.add_argument("--endpoint", default=None, help="Single endpoint to tune (default: all)")
     parser.add_argument("--n-trials", type=int, default=N_TRIALS_DEFAULT)
