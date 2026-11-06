@@ -15,7 +15,7 @@ import mlflow
 import numpy as np
 import optuna
 import pandas as pd
-from lightgbm import LGBMClassifier, LGBMRegressor
+from lightgbm import LGBMClassifier, LGBMRegressor, early_stopping, log_evaluation
 from sklearn.metrics import mean_squared_error, roc_auc_score
 from sklearn.model_selection import StratifiedGroupKFold
 
@@ -54,17 +54,19 @@ def _objective(
         n_jobs=-1,
         verbose=-1,
     )
+    callbacks = [early_stopping(50), log_evaluation(0)]
     if task == Task.REGRESSION:
         y_tr = np.log1p(y_train) if log_transform else y_train
+        y_v = np.log1p(y_val) if log_transform else y_val
         model = LGBMRegressor(**params)
-        model.fit(X_train, y_tr)
+        model.fit(X_train, y_tr, eval_X=X_val, eval_y=y_v, callbacks=callbacks)
         y_pred = np.asarray(model.predict(X_val))
         if log_transform:
             y_pred = np.expm1(y_pred)
         return float(mean_squared_error(y_val, y_pred) ** 0.5)
     else:
         model = LGBMClassifier(**params)
-        model.fit(X_train, y_train)
+        model.fit(X_train, y_train, eval_X=X_val, eval_y=y_val, callbacks=callbacks)
         y_prob = np.asarray(model.predict_proba(X_val))[:, 1]
         return -float(roc_auc_score(y_val, y_prob))
 
