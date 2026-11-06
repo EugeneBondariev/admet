@@ -18,7 +18,6 @@ from typing import Any
 import joblib
 import mlflow
 import numpy as np
-import pandas as pd
 from lightgbm import LGBMClassifier, LGBMRegressor, early_stopping, log_evaluation
 from sklearn.metrics import (
     auc,
@@ -37,7 +36,7 @@ from src.features.features import (
     quantile_bins,
 )
 from src.logging_config import setup_logging
-from src.paths import CONFIG, INTERIM, MODELS_DIR, MODELS_LGBM, REPORTS_PREDICT
+from src.paths import CONFIG, MODELS_DIR, MODELS_LGBM, REPORTS_PREDICT
 
 logger = logging.getLogger(__name__)
 
@@ -126,8 +125,8 @@ def run_endpoint(
     CV results are cached; reruns with unchanged features and params are instant.
     """
     logger.info("--- %s ---", endpoint)
-    df = pd.read_parquet(INTERIM / f"{endpoint}.parquet")
-    X, y, smiles = load_or_featurize(endpoint=endpoint, df=df)
+
+    X, y, smiles = load_or_featurize(endpoint=endpoint)
 
     params = _model_params(endpoint)
     params_hash = hashlib.md5(json.dumps(params, sort_keys=True).encode()).hexdigest()[:8]
@@ -170,8 +169,8 @@ def train_and_save(endpoint: Endpoint) -> None:
     """Train on full dataset and save to models/{endpoint}_lgbm.pkl for screening."""
     out = MODELS_LGBM / f"{endpoint}_lgbm.pkl"
     meta = MODELS_LGBM / f"{endpoint}_lgbm_meta.json"
-    df = pd.read_parquet(INTERIM / f"{endpoint}.parquet")
-    X, y, _ = load_or_featurize(endpoint=endpoint, df=df)
+
+    X, y, _ = load_or_featurize(endpoint=endpoint)
     params = _model_params(endpoint)
     params_hash = hashlib.md5(json.dumps(params, sort_keys=True).encode()).hexdigest()[:8]
 

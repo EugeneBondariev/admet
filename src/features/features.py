@@ -21,7 +21,7 @@ from rdkit.Chem.FilterCatalog import FilterCatalog, FilterCatalogParams
 from rdkit.Chem.Scaffolds import MurckoScaffold
 from tqdm import tqdm
 
-from src.paths import PROC_FEATURES
+from src.paths import INTERIM, PROC_FEATURES
 
 RDLogger.DisableLog("rdApp.warning")
 RDLogger.DisableLog("rdApp.error")
@@ -51,10 +51,9 @@ _memory = Memory(location=PROC_FEATURES, verbose=0)
 
 
 @_memory.cache
-def load_or_featurize(
-    endpoint: str, df: pd.DataFrame
-) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    """Featurize df and persist to disk; recomputes when features or data change."""
+def load_or_featurize(endpoint: str) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Featurize endpoint data and persist to disk; recomputes when features change."""
+    df = pd.read_parquet(INTERIM / f"{endpoint}.parquet")
     logger.info("Featurizing %s ...", endpoint)
     return featurize(df)
 

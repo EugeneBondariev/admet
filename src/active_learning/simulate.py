@@ -215,6 +215,39 @@ def _run_gnn_simulation(
     return results
 
 
+def _save_results(
+    results: dict[str, list[dict[str, float]]],
+    *,
+    model: str,
+    endpoint: Endpoint,
+    task: Task,
+    n_iter: int,
+    batch_size: int,
+    kappa: float,
+    n_test: int,
+    ts: str,
+    extra: dict,
+) -> None:
+    for strategy, curve in results.items():
+        report = {
+            "timestamp": datetime.now().isoformat(),
+            "endpoint": str(endpoint),
+            "task": str(task),
+            "model": model,
+            "strategy": strategy,
+            "n_iter": n_iter,
+            "batch_size": batch_size,
+            "kappa": kappa,
+            "n_test": n_test,
+            "metric_name": _metric_name(task),
+            **extra,
+            "curve": curve,
+        }
+        path = REPORTS_AL / f"{endpoint}_{model}_{strategy}_{ts}.json"
+        path.write_text(json.dumps(report, indent=2))
+        logger.info("Report -> %s", path.name)
+
+
 def run_simulation(
     endpoint: Endpoint,
     models: list[str],
@@ -226,8 +259,7 @@ def run_simulation(
 ) -> None:
     logger.info("=== %s ===", endpoint)
     task = ENDPOINT_TASK[endpoint]
-    df = pd.read_parquet(INTERIM / f"{endpoint}.parquet")
-    X, y, smiles = load_or_featurize(endpoint=endpoint, df=df)
+    X, y, smiles = load_or_featurize(endpoint=endpoint)
 
     train_idx, test_idx = scaffold_split(
         smiles=smiles,
@@ -236,68 +268,51 @@ def run_simulation(
     )
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    common = dict(
+        endpoint=endpoint,
+        task=task,
+        n_iter=n_iter,
+        batch_size=batch_size,
+        kappa=kappa,
+        n_test=int(len(test_idx)),
+        ts=ts,
+    )
 
     if "lgbm" in models:
-        lgbm_results = _run_lgbm_simulation(
-            endpoint=endpoint,
-            X=X,
-            y=y,
-            train_idx=train_idx,
-            test_idx=test_idx,
-            strategies=strategies,
-            n_iter=n_iter,
-            batch_size=batch_size,
-            kappa=kappa,
+        _save_results(
+            _run_lgbm_simulation(
+                endpoint=endpoint,
+                X=X,
+                y=y,
+                train_idx=train_idx,
+                test_idx=test_idx,
+                strategies=strategies,
+                n_iter=n_iter,
+                batch_size=batch_size,
+                kappa=kappa,
+            ),
+            model="lgbm",
+            extra={"n_train": int(len(train_idx))},
+            **common,  # type: ignore[arg-type]
         )
-        for strategy, curve in lgbm_results.items():
-            report = {
-                "timestamp": datetime.now().isoformat(),
-                "endpoint": str(endpoint),
-                "task": str(task),
-                "model": "lgbm",
-                "strategy": strategy,
-                "n_iter": n_iter,
-                "batch_size": batch_size,
-                "kappa": kappa,
-                "n_train": int(len(train_idx)),
-                "n_test": int(len(test_idx)),
-                "metric_name": _metric_name(task),
-                "curve": curve,
-            }
-            path = REPORTS_AL / f"{endpoint}_lgbm_{strategy}_{ts}.json"
-            path.write_text(json.dumps(report, indent=2))
-            logger.info("Report -> %s", path.name)
 
     if "gnn" in models:
-        gnn_results = _run_gnn_simulation(
-            endpoint=endpoint,
-            smiles_full=smiles,
-            train_idx=train_idx,
-            test_idx=test_idx,
-            strategies=strategies,
-            n_iter=n_iter,
-            batch_size=batch_size,
-            kappa=kappa,
-            al_epochs=al_epochs,
+        _save_results(
+            _run_gnn_simulation(
+                endpoint=endpoint,
+                smiles_full=smiles,
+                train_idx=train_idx,
+                test_idx=test_idx,
+                strategies=strategies,
+                n_iter=n_iter,
+                batch_size=batch_size,
+                kappa=kappa,
+                al_epochs=al_epochs,
+            ),
+            model="gnn",
+            extra={"al_epochs": al_epochs},
+            **common,  # type: ignore[arg-type]
         )
-        for strategy, curve in gnn_results.items():
-            report = {
-                "timestamp": datetime.now().isoformat(),
-                "endpoint": str(endpoint),
-                "task": str(task),
-                "model": "gnn",
-                "strategy": strategy,
-                "n_iter": n_iter,
-                "batch_size": batch_size,
-                "kappa": kappa,
-                "al_epochs": al_epochs,
-                "n_test": int(len(test_idx)),
-                "metric_name": _metric_name(task),
-                "curve": curve,
-            }
-            path = REPORTS_AL / f"{endpoint}_gnn_{strategy}_{ts}.json"
-            path.write_text(json.dumps(report, indent=2))
-            logger.info("Report -> %s", path.name)
 
 
 def main() -> None:
@@ -314,9 +329,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--strategy",
-        default="both",
-        choices=["ucb", "explore", "random", "both"],
-        help="Acquisition strategy; both runs ucb+explore+random (default: both)",
+        default="all",
+        choices=["ucb", "explore", "random", "all"],
+        help="Acquisition strategy; all runs ucb+explore+random (default: all)",
     )
     parser.add_argument("--n-iter", type=int, default=_DEFAULT_N_ITER)
     parser.add_argument("--batch-size", type=int, default=_DEFAULT_BATCH)
@@ -331,7 +346,7 @@ def main() -> None:
 
     endpoints = [Endpoint(args.endpoint)] if args.endpoint else list(Endpoint)
     models = ["lgbm", "gnn"] if args.model == "both" else [args.model]
-    strategies = ["ucb", "explore", "random"] if args.strategy == "both" else [args.strategy]
+    strategies = ["ucb", "explore", "random"] if args.strategy == "all" else [args.strategy]
 
     for endpoint in endpoints:
         run_simulation(

@@ -14,7 +14,6 @@ from typing import Any
 import mlflow
 import numpy as np
 import optuna
-import pandas as pd
 from lightgbm import LGBMClassifier, LGBMRegressor, early_stopping, log_evaluation
 from sklearn.metrics import mean_squared_error, roc_auc_score
 from sklearn.model_selection import StratifiedGroupKFold
@@ -22,7 +21,7 @@ from sklearn.model_selection import StratifiedGroupKFold
 from src.constants import ENDPOINT_TASK, LOG_TRANSFORM, Endpoint, Task
 from src.features.features import get_scaffold_groups, load_or_featurize, quantile_bins
 from src.logging_config import setup_logging
-from src.paths import CONFIG, INTERIM, MODELS_DIR
+from src.paths import CONFIG, MODELS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +72,7 @@ def _objective(
 
 def tune_endpoint(endpoint: Endpoint, n_trials: int = N_TRIALS_DEFAULT) -> dict:
     logger.info("--- Tuning %s (%d trials) ---", endpoint, n_trials)
-    df = pd.read_parquet(INTERIM / f"{endpoint}.parquet")
-    X, y, smiles = load_or_featurize(endpoint=endpoint, df=df)
+    X, y, smiles = load_or_featurize(endpoint=endpoint)
 
     task = ENDPOINT_TASK[endpoint]
     log_transform = endpoint in LOG_TRANSFORM
