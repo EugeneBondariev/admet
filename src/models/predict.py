@@ -13,6 +13,7 @@ import json
 import logging
 from datetime import datetime
 from math import nan
+from typing import Any
 
 import joblib
 import mlflow
@@ -90,7 +91,7 @@ def _run_one_fold(
     X_tr, X_val, y_tr, y_val = train_test_split(
         X_train, y_train, test_size=0.15, random_state=42
     )
-    callbacks = [early_stopping(EARLY_STOPPING_ROUNDS), log_evaluation(0)]
+    callbacks: list[Any] = [early_stopping(EARLY_STOPPING_ROUNDS), log_evaluation(0)]
 
     params = _model_params(endpoint)
     if task == Task.REGRESSION:

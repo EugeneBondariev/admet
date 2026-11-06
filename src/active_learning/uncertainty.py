@@ -14,12 +14,16 @@ returning mean and std across passes. Requires MolSchNet(dropout>0).
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 import numpy as np
 from lightgbm import LGBMClassifier, LGBMRegressor
 from sklearn.neighbors import NearestNeighbors
 
 from src.constants import ENDPOINT_TASK, LOG_TRANSFORM, Endpoint, Task
+
+if TYPE_CHECKING:
+    from src.models.gnn import MolSchNet
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +140,7 @@ class MCDropoutGNN:
         self._endpoint = endpoint
         self._n_passes = n_passes
         self._dropout = dropout
-        self._model: object | None = None  # MolSchNet; typed as object to avoid hard torch import
+        self._model: MolSchNet | None = None
         self._optimizer: object | None = None
         self._device: object | None = None
 

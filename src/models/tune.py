@@ -54,7 +54,7 @@ def _objective(
         n_jobs=-1,
         verbose=-1,
     )
-    callbacks = [early_stopping(50), log_evaluation(0)]
+    callbacks: list[Any] = [early_stopping(50), log_evaluation(0)]
     if task == Task.REGRESSION:
         y_tr = np.log1p(y_train) if log_transform else y_train
         y_v = np.log1p(y_val) if log_transform else y_val

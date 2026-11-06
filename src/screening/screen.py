@@ -17,6 +17,7 @@ from datetime import datetime
 import joblib
 import numpy as np
 import requests
+from lightgbm import LGBMClassifier, LGBMRegressor
 
 from src.constants import ENDPOINT_TASK, LOG_TRANSFORM, Endpoint, Task
 from src.features.features import FEATURE_HASH, featurize_smiles
@@ -59,20 +60,24 @@ def _passes(endpoint: Endpoint, pred: float) -> bool:
     raise ValueError(f"No threshold defined for {endpoint}")
 
 
-def _load_model(endpoint: Endpoint) -> object:
+def _load_model(endpoint: Endpoint) -> LGBMClassifier | LGBMRegressor:
     path = MODELS_LGBM / f"{endpoint}_lgbm.pkl"
     if not path.exists():
         raise FileNotFoundError(
             f"Model not found: {path} — run 'make predict' first"
         )
-    return joblib.load(path)
+    return joblib.load(path)  # type: ignore[return-value]
 
 
-def _predict(model: object, X: np.ndarray, endpoint: Endpoint) -> np.ndarray:
+def _predict(
+    model: LGBMClassifier | LGBMRegressor, X: np.ndarray, endpoint: Endpoint
+) -> np.ndarray:
     task = ENDPOINT_TASK[endpoint]
     if task == Task.CLASSIFICATION:
-        return np.asarray(model.predict_proba(X))[:, 1]  # type: ignore[union-attr]
-    preds = np.asarray(model.predict(X))  # type: ignore[union-attr]
+        assert isinstance(model, LGBMClassifier)
+        return np.asarray(model.predict_proba(X))[:, 1]
+    assert isinstance(model, LGBMRegressor)
+    preds = np.asarray(model.predict(X))
     if endpoint in LOG_TRANSFORM:
         preds = np.expm1(preds)
     return preds
@@ -99,7 +104,7 @@ def _fetch_chembl(n: int) -> list[str]:
     while len(smiles) < n:
         resp = requests.get(
             CHEMBL_API,
-            params={
+            params={  # type: ignore[arg-type]
                 "format": "json",
                 "limit": min(batch, n - len(smiles)),
                 "offset": offset,
