@@ -4,7 +4,7 @@
 PYTHON ?= .venv/Scripts/python.exe
 export PYTHONUNBUFFERED := 1
 
-.PHONY: help install install-dev freeze push typecheck lint test test-e2e fetch validate predict mlflow tune gnn
+.PHONY: help install install-dev freeze push typecheck lint test test-e2e fetch validate predict mlflow tune gnn screen
 
 help:
 	@echo ""
@@ -25,9 +25,10 @@ help:
 	@echo "  validate         Re-validate all data files on disk"
 	@echo ""
 	@echo "Model:"
-	@echo "  predict          Train + evaluate all endpoints (mean +/- sd over 5 seeds, tuned params if present)"
+	@echo "  predict          Train + evaluate all endpoints; saves models to models/ for screening"
 	@echo "  tune             Hyperparameter search with Optuna (saves to config/)"
 	@echo "  gnn              Train SchNet GNN with 3D geometry (GPU recommended)"
+	@echo "  screen           Virtual screening against ZINC20 lead-like (requires make predict first)"
 	@echo "  mlflow           Open MLflow experiment tracking UI"
 	@echo ""
 
@@ -70,6 +71,9 @@ tune:
 
 gnn:
 	$(PYTHON) -m src.models.gnn
+
+screen:
+	$(PYTHON) -m src.screening.screen $(if $(N),--n-compounds $(N))
 
 mlflow:
 	$(PYTHON) -m mlflow ui --backend-store-uri sqlite:///models/mlflow.db
