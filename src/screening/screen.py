@@ -20,12 +20,10 @@ import requests
 
 from src.constants import ENDPOINT_TASK, LOG_TRANSFORM, Endpoint, Task
 from src.features.features import FEATURE_HASH, featurize_smiles
-from src.paths import EXTERNAL, MODELS_DIR, PROCESSED, REPORTS
+from src.logging_config import setup_logging
+from src.paths import EXTERNAL, MODELS_LGBM, PROC_FEATURES, REPORTS_SCREENING
 
 logger = logging.getLogger(__name__)
-
-REPORTS_SCREENING = REPORTS / "screening"
-REPORTS_SCREENING.mkdir(parents=True, exist_ok=True)
 
 CHEMBL_API = "https://www.ebi.ac.uk/chembl/api/data/molecule.json"
 
@@ -62,7 +60,7 @@ def _passes(endpoint: Endpoint, pred: float) -> bool:
 
 
 def _load_model(endpoint: Endpoint) -> object:
-    path = MODELS_DIR / f"{endpoint}_lgbm.pkl"
+    path = MODELS_LGBM / f"{endpoint}_lgbm.pkl"
     if not path.exists():
         raise FileNotFoundError(
             f"Model not found: {path} — run 'make predict' first"
@@ -129,7 +127,7 @@ def _fetch_chembl(n: int) -> list[str]:
 
 
 def _load_or_featurize(smiles: list[str], n: int) -> tuple[np.ndarray, list[str]]:
-    cache = PROCESSED / f"chembl_lead_like_{n}_features.npz"
+    cache = PROC_FEATURES / f"chembl_lead_like_{n}_features.npz"
     smiles_file = EXTERNAL / f"chembl_lead_like_{n}.smi"
     if cache.exists():
         data = np.load(cache, allow_pickle=False)
@@ -187,7 +185,7 @@ def screen(smiles: list[str], n: int) -> dict:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    setup_logging()
     parser = argparse.ArgumentParser(description="Virtual screening against ChEMBL lead-like compounds")
     parser.add_argument(
         "--n-compounds", type=int, default=100_000,
@@ -215,7 +213,7 @@ def main() -> None:
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    hits_path = PROCESSED / f"chembl_hits_{ts}.smi"
+    hits_path = REPORTS_SCREENING / f"chembl_hits_{ts}.smi"
     hits_path.write_text("\n".join(results["hits"]))
     logger.info("Hits saved → %s", hits_path)
 

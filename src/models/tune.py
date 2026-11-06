@@ -97,7 +97,12 @@ def tune_endpoint(endpoint: Endpoint, n_trials: int = N_TRIALS_DEFAULT) -> dict:
     y_val = y[train_idx[val_rel]]
     logger.info("Train %d / val %d", len(X_tr), len(X_val))
 
-    study = optuna.create_study(direction="minimize")
+    study = optuna.create_study(
+        study_name=str(endpoint),
+        storage=f"sqlite:///{(MODELS_DIR / 'optuna.db').as_posix()}",
+        load_if_exists=True,
+        direction="minimize",
+    )
     study.optimize(
         lambda trial: _objective(
             trial=trial,

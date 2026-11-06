@@ -3,6 +3,7 @@
 Generates 3D conformers from SMILES using RDKit ETKDGv3, builds PyG Data
 objects with atomic numbers and positions for use with SchNet.
 Caches graph datasets to data/processed/{endpoint}_graphs.pt.
+Checkpoints every 500 molecules so interrupted builds resume from where they stopped.
 """
 from __future__ import annotations
 
@@ -14,8 +15,9 @@ import torch
 from rdkit import Chem, RDLogger
 from rdkit.Chem import AllChem
 from torch_geometric.data import Data
+from tqdm import tqdm
 
-from src.paths import INTERIM, PROCESSED
+from src.paths import INTERIM, PROC_GRAPHS
 
 RDLogger.DisableLog("rdApp.warning")
 RDLogger.DisableLog("rdApp.error")
@@ -24,6 +26,8 @@ logger = logging.getLogger(__name__)
 
 _ETKDG = AllChem.ETKDGv3()
 _ETKDG.randomSeed = 42
+
+CHECKPOINT_EVERY = 500
 
 
 def smiles_to_graph(smiles: str, y: float) -> Data | None:
@@ -54,40 +58,56 @@ def smiles_to_graph(smiles: str, y: float) -> Data | None:
     return Data(z=z, pos=pos, y=torch.tensor([y], dtype=torch.float))
 
 
-def build_dataset(df: pd.DataFrame) -> tuple[list[Data], list[str]]:
-    """Build PyG graphs from Drug/Y DataFrame. Returns (graphs, smiles) for valid rows."""
-    graphs: list[Data] = []
-    smiles_out: list[str] = []
-    n_failed = 0
-    for smi, label in zip(df["Drug"], df["Y"]):
-        g = smiles_to_graph(smiles=smi, y=label)
-        if g is None:
-            n_failed += 1
-        else:
-            graphs.append(g)
-            smiles_out.append(smi)
-    if n_failed:
-        logger.warning("Failed 3D conformer for %d molecules", n_failed)
-    logger.info("Built %d molecular graphs", len(graphs))
-    return graphs, smiles_out
-
-
 def load_or_build_dataset(
     endpoint: str, df: pd.DataFrame
 ) -> tuple[list[Data], list[str]]:
-    """Load cached graph dataset or build and cache it."""
-    cache = PROCESSED / f"{endpoint}_graphs.pt"
+    """Load cached graph dataset or build and cache it, resuming from checkpoint if interrupted."""
+    cache = PROC_GRAPHS / f"{endpoint}_graphs.pt"
+    ckpt = PROC_GRAPHS / f"{endpoint}_graphs_ckpt.pt"
+
     if cache.exists():
         if (INTERIM / f"{endpoint}.parquet").stat().st_mtime > cache.stat().st_mtime:
             logger.warning(
                 "Interim data for %s is newer than graph cache — delete %s to rebuild",
-                endpoint,
-                cache,
+                endpoint, cache,
             )
-        logger.info("Loading cached graphs for %s", endpoint)
+        logger.info("Loading cached graphs for %s (%.1f MB) ...", endpoint, cache.stat().st_size / 1e6)
         saved = torch.load(cache, weights_only=False)
         return saved["graphs"], saved["smiles"]
-    graphs, smiles = build_dataset(df)
-    torch.save({"graphs": graphs, "smiles": smiles}, cache)
+
+    graphs: list[Data] = []
+    smiles_out: list[str] = []
+    start_idx = 0
+    n_failed = 0
+
+    if ckpt.exists():
+        saved_ckpt = torch.load(ckpt, weights_only=False)
+        graphs = saved_ckpt["graphs"]
+        smiles_out = saved_ckpt["smiles"]
+        start_idx = saved_ckpt["processed_count"]
+        logger.info("Resuming from checkpoint: %d/%d rows already done", start_idx, len(df))
+
+    rows = zip(df["Drug"].iloc[start_idx:], df["Y"].iloc[start_idx:])
+    with tqdm(rows, desc="building graphs", unit="mol", initial=start_idx, total=len(df)) as pbar:
+        for local_i, (smi, label) in enumerate(pbar):
+            g = smiles_to_graph(smiles=smi, y=float(label))
+            if g is None:
+                n_failed += 1
+            else:
+                graphs.append(g)
+                smiles_out.append(smi)
+
+            processed = start_idx + local_i + 1
+            if processed % CHECKPOINT_EVERY == 0:
+                torch.save({"graphs": graphs, "smiles": smiles_out, "processed_count": processed}, ckpt)
+
+    if n_failed:
+        logger.warning("Failed 3D conformer for %d molecules", n_failed)
+    logger.info("Built %d/%d molecular graphs", len(graphs), len(df))
+
+    torch.save({"graphs": graphs, "smiles": smiles_out}, cache)
     logger.info("Cached %d graphs → %s", len(graphs), cache.name)
-    return graphs, smiles
+    if ckpt.exists():
+        ckpt.unlink()
+
+    return graphs, smiles_out

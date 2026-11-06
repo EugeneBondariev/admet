@@ -29,14 +29,14 @@ from sklearn.metrics import (
 from sklearn.model_selection import StratifiedGroupKFold, train_test_split
 
 from src.constants import ENDPOINT_TASK, LOG_TRANSFORM, Endpoint, Task
-from src.logging_config import setup_logging
 from src.features.features import (
     FEATURE_HASH,
     get_scaffold_groups,
     load_or_featurize,
     quantile_bins,
 )
-from src.paths import CONFIG, INTERIM, MODELS_DIR, PROCESSED, REPORTS_PREDICT
+from src.logging_config import setup_logging
+from src.paths import CONFIG, INTERIM, MODELS_DIR, MODELS_LGBM, REPORTS_PREDICT
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ def _run_one_fold(
         return {"rmse": rmse, "r2": r2}
 
     classifier = LGBMClassifier(**params)
-    classifier.fit(X_tr, y_tr, eval_set=[(X_val, y_val)], callbacks=callbacks)
+    classifier.fit(X_tr, y_tr, eval_X=X_val, eval_y=y_val, callbacks=callbacks)
     y_prob = np.asarray(classifier.predict_proba(X_test))[:, 1]
     roc = float(roc_auc_score(y_test, y_prob))
     prc = _auprc(y_test, y_prob)
@@ -130,7 +130,7 @@ def run_endpoint(
 
     params = _model_params(endpoint)
     params_hash = hashlib.md5(json.dumps(params, sort_keys=True).encode()).hexdigest()[:8]
-    cv_cache = PROCESSED / f"{endpoint}_cv_cache.json"
+    cv_cache = MODELS_LGBM / f"{endpoint}_cv_cache.json"
 
     if cv_cache.exists():
         cached = json.loads(cv_cache.read_text())
@@ -167,8 +167,8 @@ def run_endpoint(
 
 def train_and_save(endpoint: Endpoint) -> None:
     """Train on full dataset and save to models/{endpoint}_lgbm.pkl for screening."""
-    out = MODELS_DIR / f"{endpoint}_lgbm.pkl"
-    meta = MODELS_DIR / f"{endpoint}_lgbm_meta.json"
+    out = MODELS_LGBM / f"{endpoint}_lgbm.pkl"
+    meta = MODELS_LGBM / f"{endpoint}_lgbm_meta.json"
     df = pd.read_parquet(INTERIM / f"{endpoint}.parquet")
     X, y, _ = load_or_featurize(endpoint=endpoint, df=df)
     params = _model_params(endpoint)

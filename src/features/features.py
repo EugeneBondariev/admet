@@ -14,13 +14,14 @@ from math import ceil
 
 import numpy as np
 import pandas as pd
+from joblib import Memory
 from rdkit import Chem, RDLogger
-from tqdm import tqdm
 from rdkit.Chem import Descriptors, MACCSkeys, rdFingerprintGenerator, rdMolDescriptors
 from rdkit.Chem.FilterCatalog import FilterCatalog, FilterCatalogParams
 from rdkit.Chem.Scaffolds import MurckoScaffold
+from tqdm import tqdm
 
-from src.paths import INTERIM, PROCESSED
+from src.paths import PROC_FEATURES
 
 RDLogger.DisableLog("rdApp.warning")
 RDLogger.DisableLog("rdApp.error")
@@ -46,32 +47,16 @@ FEATURE_NAMES: list[str] = (
 )
 FEATURE_HASH: str = hashlib.md5(",".join(FEATURE_NAMES).encode()).hexdigest()[:8]
 
+_memory = Memory(location=PROC_FEATURES, verbose=0)
 
+
+@_memory.cache
 def load_or_featurize(
     endpoint: str, df: pd.DataFrame
 ) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    """Load cached features from data/processed/ or featurize and cache."""
-    cache = PROCESSED / f"{endpoint}_features.npz"
-    if cache.exists():
-        data = np.load(cache, allow_pickle=False)
-        cached_hash = str(data["feature_hash"]) if "feature_hash" in data else None
-        if cached_hash != FEATURE_HASH:
-            logger.warning(
-                "Feature set changed (%s → %s) — rebuilding cache for %s",
-                cached_hash, FEATURE_HASH, endpoint,
-            )
-        elif (INTERIM / f"{endpoint}.parquet").stat().st_mtime > cache.stat().st_mtime:
-            logger.warning(
-                "Interim data for %s is newer than feature cache — rebuilding",
-                endpoint,
-            )
-        else:
-            logger.info("Loading cached features for %s", endpoint)
-            return data["X"], data["y"], list(data["smiles"])
-    X, y, smiles = featurize(df)
-    np.savez_compressed(cache, X=X, y=y, smiles=np.array(smiles), feature_hash=np.array(FEATURE_HASH))
-    logger.info("Cached features → %s", cache.name)
-    return X, y, smiles
+    """Featurize df and persist to disk; recomputes when features or data change."""
+    logger.info("Featurizing %s ...", endpoint)
+    return featurize(df)
 
 
 def _mol_to_features(mol: Chem.Mol) -> np.ndarray:
@@ -180,19 +165,14 @@ def scaffold_split(
     """
     scaffold_to_indices: dict[str, list[int]] = {}
     unparseable: list[int] = []
-    for i, smi in enumerate(smiles):
-        mol = Chem.MolFromSmiles(smi)
-        if mol is None:
+    for i, key in enumerate(get_scaffold_groups(smiles)):
+        if key.startswith("unparseable:"):
             # featurize() already drops these, so this only fires on raw input.
             # Pin them to train: a molecule with no features cannot be predicted,
             # so letting it reach test would corrupt the metric.
             unparseable.append(i)
-            continue
-        scaffold = MurckoScaffold.MurckoScaffoldSmiles(mol=mol, includeChirality=False)
-        # Keyed by canonical SMILES so true duplicates still share a group —
-        # the same molecule either side of the split is leakage, not diversity.
-        key = scaffold or f"acyclic:{Chem.MolToSmiles(mol)}"
-        scaffold_to_indices.setdefault(key, []).append(i)
+        else:
+            scaffold_to_indices.setdefault(key, []).append(i)
 
     if unparseable:
         logger.warning(
