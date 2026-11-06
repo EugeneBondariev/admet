@@ -13,7 +13,16 @@ import pytest
 from rdkit import Chem
 from rdkit.Chem.Scaffolds import MurckoScaffold
 
-from src.features.features import FP_BITS, _quantile_bins, featurize, scaffold_split
+from src.features.features import (
+    FEATURE_NAMES,
+    FP_BITS,
+    MACCS_BITS,
+    featurize,
+    featurize_smiles,
+    get_scaffold_groups,
+    quantile_bins,
+    scaffold_split,
+)
 
 # Four unrelated cores; alkyl chains of increasing length give distinct
 # molecules that all reduce to the same Murcko scaffold.
@@ -245,7 +254,7 @@ def test_regression_split_covers_the_whole_label_range() -> None:
     _, unstratified = scaffold_split(smiles)
     _, stratified = scaffold_split(smiles, y=y, stratify_bins=5)
 
-    bins = _quantile_bins(y, 5)
+    bins = quantile_bins(y, 5)
     assert set(bins[stratified]) == set(bins)
     assert set(bins[unstratified]) != set(bins)
 
@@ -258,7 +267,7 @@ def test_regression_split_handles_heavily_tied_labels() -> None:
 
     train_idx, test_idx = scaffold_split(smiles, y=y, stratify_bins=5)
 
-    assert len(np.unique(_quantile_bins(y, 5))) < 5
+    assert len(np.unique(quantile_bins(y, 5))) < 5
     assert set(np.unique(y[test_idx])) == {3.0, 150.0}
     assert set(np.unique(y[train_idx])) == {3.0, 150.0}
 
@@ -284,3 +293,82 @@ def test_featurize_fingerprint_block_is_binary() -> None:
 
     assert set(np.unique(X[:, :FP_BITS])) <= {0.0, 1.0}
     assert X[:, :FP_BITS].sum() > 0
+
+
+def test_featurize_maccs_block_is_binary() -> None:
+    df = pd.DataFrame({"Drug": ["CC(=O)Oc1ccccc1C(=O)O"], "Y": [0.0]})
+
+    X, _, _ = featurize(df)
+
+    maccs_start = len(FEATURE_NAMES) - MACCS_BITS - 2
+    maccs_block = X[:, maccs_start : maccs_start + MACCS_BITS]
+    assert set(np.unique(maccs_block)) <= {0.0, 1.0}
+
+
+def test_featurize_ro5_violations_range() -> None:
+    # Aspirin (MW 180, logP 1.2, HBD 1, HBA 4) — 0 violations.
+    # Cyclosporin A — a large cyclic peptide well over MW 500 and logP 5.
+    df = pd.DataFrame({
+        "Drug": ["CC(=O)Oc1ccccc1C(=O)O", "CCC1C(=O)N(CC(=O)N(C(C(=O)N(C(C(=O)NC(C(=O)N(C(C(=O)N(C(C(=O)N1C)CC(C)C)C)CC(C)C)C)C)CC(C)C)C)CC(C)C)C)C"],
+        "Y": [0.0, 0.0],
+    })
+
+    X, _, _ = featurize(df)
+
+    ro5_col = -2
+    assert X[0, ro5_col] == 0.0
+    assert X[1, ro5_col] > 0.0
+    assert 0.0 <= X[:, ro5_col].max() <= 4.0
+
+
+def test_featurize_pains_flag() -> None:
+    # Rhodanine core is a classic PAINS alert.
+    # Aspirin has no PAINS alert.
+    rhodanine = "O=C1NC(=S)SC1"
+    aspirin = "CC(=O)Oc1ccccc1C(=O)O"
+    df = pd.DataFrame({"Drug": [aspirin, rhodanine], "Y": [0.0, 0.0]})
+
+    X, _, _ = featurize(df)
+
+    pains_col = -1
+    assert X[0, pains_col] == 0.0
+    assert X[1, pains_col] == 1.0
+
+
+def test_featurize_smiles_drops_unparseable() -> None:
+    smiles = ["CCO", "not_a_molecule", "c1ccccc1", "%%%"]
+
+    X, valid = featurize_smiles(smiles)
+
+    assert valid == ["CCO", "c1ccccc1"]
+    assert X.shape[0] == 2
+
+
+def test_featurize_smiles_raises_on_all_invalid() -> None:
+    with pytest.raises(ValueError, match="No parseable SMILES"):
+        featurize_smiles(["not_valid", "%%%"])
+
+
+def test_get_scaffold_groups_same_core_same_label() -> None:
+    # Three aspirin analogs all reduce to benzene — must share one label.
+    benzene_analogs = ["CC(=O)Oc1ccccc1C(=O)O", "Cc1ccccc1", "CC(=O)Nc1ccc(O)cc1"]
+
+    groups = get_scaffold_groups(benzene_analogs)
+
+    assert groups[0] == groups[1] == groups[2]
+
+
+def test_get_scaffold_groups_distinct_cores_distinct_labels() -> None:
+    smiles = ["c1ccccc1", "c1ccncc1", "C1CCCCC1"]  # benzene, pyridine, cyclohexane
+
+    groups = get_scaffold_groups(smiles)
+
+    assert len(set(groups)) == 3
+
+
+def test_get_scaffold_groups_acyclics_are_not_pooled() -> None:
+    acyclics = ["C", "CC", "CCC", "CCCC"]
+
+    groups = get_scaffold_groups(acyclics)
+
+    assert len(set(groups)) == 4

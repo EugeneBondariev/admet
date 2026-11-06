@@ -1,10 +1,12 @@
-"""Molecular featurization: ECFP4 Morgan fingerprints + RDKit physicochemical descriptors.
+"""Molecular featurization: Morgan fingerprints + RDKit descriptors + MACCS + Ro5 + PAINS.
 
-Features: 2048-bit Morgan fingerprint (radius=2) concatenated with ~210 RDKit descriptors.
+Features: 2048-bit Morgan (radius=2), ~210 RDKit physicochemical descriptors,
+167-bit MACCS keys, Lipinski Ro5 violation count, PAINS alert flag.
 Rows with unparseable SMILES are dropped and logged.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import warnings
 from collections import Counter
@@ -13,7 +15,9 @@ from math import ceil
 import numpy as np
 import pandas as pd
 from rdkit import Chem, RDLogger
-from rdkit.Chem import Descriptors, rdFingerprintGenerator
+from tqdm import tqdm
+from rdkit.Chem import Descriptors, MACCSkeys, rdFingerprintGenerator, rdMolDescriptors
+from rdkit.Chem.FilterCatalog import FilterCatalog, FilterCatalogParams
 from rdkit.Chem.Scaffolds import MurckoScaffold
 
 from src.paths import INTERIM, PROCESSED
@@ -25,12 +29,22 @@ logger = logging.getLogger(__name__)
 
 FP_RADIUS = 2
 FP_BITS = 2048
+MACCS_BITS = 167
 
 _morgan_gen = rdFingerprintGenerator.GetMorganGenerator(radius=FP_RADIUS, fpSize=FP_BITS)
 _DESC_FUNCS = Descriptors.descList  # list of (name, callable) pairs
+
+_pains_params = FilterCatalogParams()
+_pains_params.AddCatalog(FilterCatalogParams.FilterCatalogs.PAINS)
+_PAINS_CATALOG = FilterCatalog(_pains_params)
+
 FEATURE_NAMES: list[str] = (
-    [f"fp_{i}" for i in range(FP_BITS)] + [name for name, _ in _DESC_FUNCS]
+    [f"fp_{i}" for i in range(FP_BITS)]
+    + [name for name, _ in _DESC_FUNCS]
+    + [f"maccs_{i}" for i in range(MACCS_BITS)]
+    + ["ro5_violations", "pains_flag"]
 )
+FEATURE_HASH: str = hashlib.md5(",".join(FEATURE_NAMES).encode()).hexdigest()[:8]
 
 
 def load_or_featurize(
@@ -39,17 +53,23 @@ def load_or_featurize(
     """Load cached features from data/processed/ or featurize and cache."""
     cache = PROCESSED / f"{endpoint}_features.npz"
     if cache.exists():
-        if (INTERIM / f"{endpoint}.parquet").stat().st_mtime > cache.stat().st_mtime:
+        data = np.load(cache, allow_pickle=False)
+        cached_hash = str(data["feature_hash"]) if "feature_hash" in data else None
+        if cached_hash != FEATURE_HASH:
             logger.warning(
-                "Interim data for %s is newer than feature cache — delete %s to rebuild",
-                endpoint,
-                cache,
+                "Feature set changed (%s → %s) — rebuilding cache for %s",
+                cached_hash, FEATURE_HASH, endpoint,
             )
-        logger.info("Loading cached features for %s", endpoint)
-        data = np.load(cache)
-        return data["X"], data["y"], list(data["smiles"])
+        elif (INTERIM / f"{endpoint}.parquet").stat().st_mtime > cache.stat().st_mtime:
+            logger.warning(
+                "Interim data for %s is newer than feature cache — rebuilding",
+                endpoint,
+            )
+        else:
+            logger.info("Loading cached features for %s", endpoint)
+            return data["X"], data["y"], list(data["smiles"])
     X, y, smiles = featurize(df)
-    np.savez_compressed(cache, X=X, y=y, smiles=np.array(smiles))
+    np.savez_compressed(cache, X=X, y=y, smiles=np.array(smiles), feature_hash=np.array(FEATURE_HASH))
     logger.info("Cached features → %s", cache.name)
     return X, y, smiles
 
@@ -59,7 +79,15 @@ def _mol_to_features(mol: Chem.Mol) -> np.ndarray:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         desc = np.array([fn(mol) for _, fn in _DESC_FUNCS], dtype=np.float32)
-    return np.concatenate([fp, desc])
+    maccs = np.array(MACCSkeys.GenMACCSKeys(mol), dtype=np.float32)
+    ro5 = np.float32(sum([
+        Descriptors.MolWt(mol) > 500,
+        Descriptors.MolLogP(mol) > 5,
+        rdMolDescriptors.CalcNumHBD(mol) > 5,
+        rdMolDescriptors.CalcNumHBA(mol) > 10,
+    ]))
+    pains = np.float32(_PAINS_CATALOG.HasMatch(mol))
+    return np.concatenate([fp, desc, maccs, [ro5, pains]])
 
 
 def featurize(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, list[str]]:
@@ -68,7 +96,29 @@ def featurize(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, list[str]]:
     return np.vstack(rows), df["Y"].to_numpy(dtype=np.float32), list(df["Drug"])
 
 
-def _quantile_bins(y: np.ndarray, n_bins: int) -> np.ndarray:
+def featurize_smiles(smiles: list[str]) -> tuple[np.ndarray, list[str]]:
+    """Featurize raw SMILES from an external source, dropping unparseable ones.
+
+    Unlike featurize(), this validates SMILES — external data is not guaranteed clean.
+    Returns (X, valid_smiles).
+    """
+    rows, valid = [], []
+    for smi in tqdm(smiles, desc="featurizing", unit="mol"):
+        mol = Chem.MolFromSmiles(smi)
+        if mol is None:
+            continue
+        rows.append(_mol_to_features(mol))
+        valid.append(smi)
+    n_dropped = len(smiles) - len(valid)
+    if n_dropped:
+        logger.warning("Dropped %d unparseable SMILES", n_dropped)
+    if not rows:
+        raise ValueError("No parseable SMILES in input")
+    logger.info("Featurized %d/%d molecules (%d features)", len(valid), len(smiles), len(FEATURE_NAMES))
+    return np.vstack(rows), valid
+
+
+def quantile_bins(y: np.ndarray, n_bins: int) -> np.ndarray:
     """Cut continuous labels into n_bins roughly equal-count quantile bins.
 
     Duplicate edges are collapsed, so a label with many tied values — Clearance
@@ -76,6 +126,23 @@ def _quantile_bins(y: np.ndarray, n_bins: int) -> np.ndarray:
     """
     edges = np.unique(np.quantile(y, np.linspace(0.0, 1.0, n_bins + 1)[1:-1]))
     return np.searchsorted(edges, y, side="right").astype(int)
+
+
+def get_scaffold_groups(smiles: list[str]) -> list[str]:
+    """Return a Murcko scaffold label for each SMILES (for use with GroupKFold).
+
+    Mirrors the keying logic in scaffold_split: acyclic molecules get a unique
+    key so they are never pooled into one inseparable group.
+    """
+    groups = []
+    for i, smi in enumerate(smiles):
+        mol = Chem.MolFromSmiles(smi)
+        if mol is None:
+            groups.append(f"unparseable:{i}")
+            continue
+        scaffold = MurckoScaffold.MurckoScaffoldSmiles(mol=mol, includeChirality=False)
+        groups.append(scaffold or f"acyclic:{Chem.MolToSmiles(mol)}")
+    return groups
 
 
 def scaffold_split(
@@ -152,7 +219,7 @@ def scaffold_split(
     elif stratify_bins is None:
         labels = y.astype(int)
     else:
-        labels = _quantile_bins(y, stratify_bins)
+        labels = quantile_bins(y, stratify_bins)
     # Shares come from the splittable rows only — a stratum whose molecules are
     # all unparseable can never reach test, and should not be given a quota.
     splittable = [i for g in scaffold_to_indices.values() for i in g]
