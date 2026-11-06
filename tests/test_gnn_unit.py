@@ -71,3 +71,64 @@ def test_radius_graph_edge_weights_are_euclidean_distances() -> None:
 
     assert edge_weight.shape[0] == 2  # bidirectional
     assert edge_weight[0].item() == pytest.approx(5.0, abs=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# Training checkpoint — save / load / restore roundtrip
+# ---------------------------------------------------------------------------
+
+from src.models.gnn import MolSchNet  # noqa: E402
+
+
+def test_training_checkpoint_roundtrip(tmp_path) -> None:
+    """Checkpoint dict can be saved, loaded, and used to restore exact model state."""
+    model = MolSchNet()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
+
+    ckpt_path = tmp_path / "train_ckpt.pt"
+    torch.save({
+        "epoch": 5,
+        "model_state": model.state_dict(),
+        "optimizer_state": optimizer.state_dict(),
+        "scheduler_state": scheduler.state_dict(),
+        "best_val": 0.42,
+        "best_epoch": 3,
+        "best_state": {k: v.clone() for k, v in model.state_dict().items()},
+        "no_improve": 2,
+    }, ckpt_path)
+
+    loaded = torch.load(ckpt_path, weights_only=False)
+
+    assert loaded["epoch"] == 5
+    assert loaded["best_val"] == pytest.approx(0.42)
+    assert loaded["no_improve"] == 2
+
+    model2 = MolSchNet()
+    model2.load_state_dict(loaded["model_state"])
+    for p1, p2 in zip(model.parameters(), model2.parameters()):
+        assert torch.equal(p1, p2)
+
+
+def test_training_checkpoint_contains_required_keys(tmp_path) -> None:
+    model = MolSchNet()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
+
+    ckpt = {
+        "epoch": 1,
+        "model_state": model.state_dict(),
+        "optimizer_state": optimizer.state_dict(),
+        "scheduler_state": scheduler.state_dict(),
+        "best_val": float("inf"),
+        "best_epoch": 0,
+        "best_state": {},
+        "no_improve": 0,
+    }
+    ckpt_path = tmp_path / "train_ckpt.pt"
+    torch.save(ckpt, ckpt_path)
+
+    loaded = torch.load(ckpt_path, weights_only=False)
+    required = {"epoch", "model_state", "optimizer_state", "scheduler_state",
+                "best_val", "best_epoch", "best_state", "no_improve"}
+    assert required <= loaded.keys()

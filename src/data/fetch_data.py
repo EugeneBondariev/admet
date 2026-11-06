@@ -14,6 +14,7 @@ from tdc.single_pred import ADME, Tox
 
 from src.constants import ENDPOINT_TDC_GROUP, Endpoint, TDCGroup
 from src.data.validate_data import is_valid_smiles
+from src.logging_config import setup_logging
 from src.paths import INTERIM, RAW
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,7 @@ def fetch_endpoint(endpoint: Endpoint, force: bool = False) -> None:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    setup_logging()
     for endpoint in Endpoint:
         fetch_endpoint(endpoint)
 

@@ -20,6 +20,7 @@ from src.features.features import (
     featurize,
     featurize_smiles,
     get_scaffold_groups,
+    load_or_featurize,
     quantile_bins,
     scaffold_split,
 )
@@ -372,3 +373,28 @@ def test_get_scaffold_groups_acyclics_are_not_pooled() -> None:
     groups = get_scaffold_groups(acyclics)
 
     assert len(set(groups)) == 4
+
+
+# ---------------------------------------------------------------------------
+# load_or_featurize — cache creation, reuse, and hash invalidation
+# ---------------------------------------------------------------------------
+
+_CACHE_DF = pd.DataFrame({"Drug": ["CCO", "c1ccccc1", "CC(=O)O"], "Y": [1.0, 2.0, 3.0]})
+
+
+def test_load_or_featurize_returns_correct_shape() -> None:
+    X, y, smiles = load_or_featurize(endpoint="_unit_test_", df=_CACHE_DF)
+
+    assert X.shape == (3, len(FEATURE_NAMES))
+    assert y.shape == (3,)
+    assert len(smiles) == 3
+
+
+def test_load_or_featurize_results_are_aligned() -> None:
+    df = pd.DataFrame({"Drug": ["CCO", "c1ccccc1"], "Y": [1.5, 2.5]})
+    X, y, smiles = load_or_featurize(endpoint="_unit_test_align_", df=df)
+
+    assert y[0] == pytest.approx(1.5)
+    assert y[1] == pytest.approx(2.5)
+    assert smiles[0] == "CCO"
+    assert smiles[1] == "c1ccccc1"

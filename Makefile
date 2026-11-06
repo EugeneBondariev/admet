@@ -4,7 +4,7 @@
 PYTHON ?= .venv/Scripts/python.exe
 export PYTHONUNBUFFERED := 1
 
-.PHONY: help install install-dev freeze push typecheck lint test test-e2e fetch validate predict mlflow tune gnn screen
+.PHONY: help install install-dev freeze push typecheck lint test test-e2e fetch validate predict mlflow tune gnn screen active-learning
 
 help:
 	@echo ""
@@ -29,6 +29,7 @@ help:
 	@echo "  tune             Hyperparameter search with Optuna (saves to config/)"
 	@echo "  gnn              Train SchNet GNN with 3D geometry (GPU recommended)"
 	@echo "  screen           Virtual screening against ZINC20 lead-like (requires make predict first)"
+	@echo "  active-learning  AL simulation: UCB/explore vs random baseline (ENDPOINT= MODEL= N_ITER= BATCH= KAPPA=)"
 	@echo "  mlflow           Open MLflow experiment tracking UI"
 	@echo ""
 
@@ -42,14 +43,14 @@ install-dev: install
 freeze:
 	$(PYTHON) -m pip freeze > requirements-lock.txt
 
-push: typecheck test
+push: lint typecheck test
 	git push
-
-typecheck:
-	$(PYTHON) -m mypy src/
 
 lint:
 	$(PYTHON) -m ruff check .
+
+typecheck:
+	$(PYTHON) -m mypy src/
 
 test:
 	$(PYTHON) -m pytest
@@ -74,6 +75,14 @@ gnn:
 
 screen:
 	$(PYTHON) -m src.screening.screen $(if $(N),--n-compounds $(N))
+
+active-learning:
+	$(PYTHON) -m src.active_learning.simulate \
+		$(if $(ENDPOINT),--endpoint $(ENDPOINT)) \
+		$(if $(MODEL),--model $(MODEL)) \
+		$(if $(N_ITER),--n-iter $(N_ITER)) \
+		$(if $(BATCH),--batch-size $(BATCH)) \
+		$(if $(KAPPA),--kappa $(KAPPA))
 
 mlflow:
 	$(PYTHON) -m mlflow ui --backend-store-uri sqlite:///models/mlflow.db

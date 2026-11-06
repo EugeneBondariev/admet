@@ -12,6 +12,7 @@ import pandas as pd
 from rdkit import Chem
 
 from src.constants import ENDPOINT_TASK, Endpoint, Task
+from src.logging_config import setup_logging
 from src.paths import INTERIM
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,7 @@ def validate_endpoint(endpoint: Endpoint) -> bool:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    setup_logging()
     results = {ep: validate_endpoint(ep) for ep in Endpoint}
     failed = [ep for ep, ok in results.items() if not ok]
     if failed:
