@@ -29,7 +29,7 @@ help:
 	@echo "  tune             Hyperparameter search with Optuna (saves to config/)"
 	@echo "  gnn              Train SchNet GNN with 3D geometry (GPU recommended)"
 	@echo "  screen           Virtual screening against ZINC20 lead-like (requires make predict first)"
-	@echo "  active-learning  AL simulation: UCB/explore vs random baseline (ENDPOINT= MODEL= N_ITER= BATCH= KAPPA=)"
+	@echo "  active-learning  AL simulation: ucb/explore/random strategies (ENDPOINT= MODEL= N_ITER= BATCH= KAPPA= STRATEGY=)"
 	@echo "  mlflow           Open MLflow experiment tracking UI"
 	@echo ""
 
@@ -82,7 +82,8 @@ active-learning:
 		$(if $(MODEL),--model $(MODEL)) \
 		$(if $(N_ITER),--n-iter $(N_ITER)) \
 		$(if $(BATCH),--batch-size $(BATCH)) \
-		$(if $(KAPPA),--kappa $(KAPPA))
+		$(if $(KAPPA),--kappa $(KAPPA)) \
+		$(if $(STRATEGY),--strategy $(STRATEGY))
 
 mlflow:
 	$(PYTHON) -m mlflow ui --backend-store-uri sqlite:///models/mlflow.db
