@@ -12,21 +12,26 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import warnings
 from datetime import datetime
 
-import mlflow
-import numpy as np
-import pandas as pd
-import torch
-import torch.nn as nn
-from sklearn.metrics import auc, mean_squared_error, precision_recall_curve, r2_score, roc_auc_score
-from torch_geometric.loader import DataLoader
-from torch_geometric.nn import SchNet
+# Must precede torch_geometric imports to suppress torch.jit.script FutureWarning
+warnings.filterwarnings("ignore", category=FutureWarning, message=".*torch.jit.script.*")
 
-from src.constants import ENDPOINT_TASK, LOG_TRANSFORM, Endpoint, Task
-from src.features.features import scaffold_split
-from src.features.mol_graph import load_or_build_dataset
-from src.paths import INTERIM, MODELS_DIR, REPORTS_GNN
+import mlflow  # noqa: E402
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+import torch  # noqa: E402
+import torch.nn as nn  # noqa: E402
+from sklearn.metrics import auc, mean_squared_error, precision_recall_curve, r2_score, roc_auc_score  # noqa: E402
+from torch_geometric.loader import DataLoader  # noqa: E402
+from torch_geometric.nn import SchNet  # noqa: E402
+
+from src.constants import ENDPOINT_TASK, LOG_TRANSFORM, Endpoint, Task  # noqa: E402
+from src.features.features import scaffold_split  # noqa: E402
+from src.features.mol_graph import load_or_build_dataset  # noqa: E402
+from src.logging_config import setup_logging  # noqa: E402
+from src.paths import INTERIM, MODELS_DIR, MODELS_GNN, REPORTS_GNN  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +44,7 @@ NUM_INTERACTIONS = 6
 
 
 CUTOFF = 10.0
+TRAIN_CHECKPOINT_EVERY = 5
 
 
 class _TorchRadiusGraph(nn.Module):
@@ -62,7 +68,7 @@ class _TorchRadiusGraph(nn.Module):
 
 
 class MolSchNet(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self, dropout: float = 0.0) -> None:
         super().__init__()
         self.net = SchNet(
             hidden_channels=HIDDEN,
@@ -73,11 +79,13 @@ class MolSchNet(nn.Module):
         )
         # SchNet's default interaction_graph requires pyg-lib; replace with pure-PyTorch fallback
         self.net.interaction_graph = _TorchRadiusGraph(cutoff=CUTOFF)
+        # dropout=0 → Identity; dropout>0 enables MC dropout uncertainty at inference
+        self.dropout: nn.Module = nn.Dropout(p=dropout) if dropout > 0.0 else nn.Identity()
 
     def forward(
         self, z: torch.Tensor, pos: torch.Tensor, batch: torch.Tensor
     ) -> torch.Tensor:
-        return self.net(z=z, pos=pos, batch=batch)
+        return self.dropout(self.net(z=z, pos=pos, batch=batch))
 
 
 def _auprc(y_true: np.ndarray, y_prob: np.ndarray) -> float:
@@ -157,8 +165,25 @@ def run_gnn_endpoint(
     best_epoch = 0
     best_state: dict = {}
     no_improve = 0
+    start_epoch = 1
 
-    for epoch in range(1, max_epochs + 1):
+    ckpt_path = MODELS_GNN / f"{endpoint}_train_ckpt.pt"
+    if ckpt_path.exists():
+        ckpt = torch.load(ckpt_path, weights_only=False, map_location=device)
+        model.load_state_dict(ckpt["model_state"])
+        optimizer.load_state_dict(ckpt["optimizer_state"])
+        scheduler.load_state_dict(ckpt["scheduler_state"])
+        best_val = ckpt["best_val"]
+        best_epoch = ckpt["best_epoch"]
+        best_state = ckpt["best_state"]
+        no_improve = ckpt["no_improve"]
+        start_epoch = ckpt["epoch"] + 1
+        logger.info(
+            "Resuming GNN training from epoch %d (best val: %.4f @ epoch %d)",
+            start_epoch, best_val, best_epoch,
+        )
+
+    for epoch in range(start_epoch, max_epochs + 1):
         model.train()
         for batch in train_loader:
             batch = batch.to(device)
@@ -199,11 +224,30 @@ def run_gnn_endpoint(
                 epoch, metric_name, val_metric, best_val, best_epoch,
             )
 
+        if epoch % TRAIN_CHECKPOINT_EVERY == 0:
+            torch.save({
+                "epoch": epoch,
+                "model_state": model.state_dict(),
+                "optimizer_state": optimizer.state_dict(),
+                "scheduler_state": scheduler.state_dict(),
+                "best_val": best_val,
+                "best_epoch": best_epoch,
+                "best_state": best_state,
+                "no_improve": no_improve,
+            }, ckpt_path)
+
         if no_improve >= patience:
             logger.info("Early stopping at epoch %d", epoch)
             break
 
+    if ckpt_path.exists():
+        ckpt_path.unlink()
+
     model.load_state_dict(best_state)
+    model_path = MODELS_GNN / f"{endpoint}_gnn.pt"
+    torch.save(best_state, model_path)
+    logger.info("Saved best model -> %s", model_path.name)
+
     test_preds, test_true = _eval(
         model=model, loader=test_loader, device=device,
         task=task, log_transform=log_transform,
@@ -222,7 +266,7 @@ def run_gnn_endpoint(
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    setup_logging()
     parser = argparse.ArgumentParser(description="Train SchNet GNN for ADMET prediction")
     parser.add_argument("--endpoint", default=None)
     parser.add_argument(
