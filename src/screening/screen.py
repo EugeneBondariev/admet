@@ -16,6 +16,7 @@ from datetime import datetime
 
 import joblib
 import numpy as np
+import pandas as pd
 import requests
 from lightgbm import LGBMClassifier, LGBMRegressor
 
@@ -166,9 +167,21 @@ def screen(smiles: list[str], n: int) -> dict:
     pass_masks: dict[Endpoint, np.ndarray] = {
         ep: np.array([_passes(ep, float(p)) for p in preds[ep]]) for ep in Endpoint
     }
-    all_pass = np.ones(n_valid, dtype=bool)
-    for mask in pass_masks.values():
-        all_pass &= mask
+    n_filters_passed: np.ndarray = np.stack(
+        [pass_masks[ep].astype(int) for ep in Endpoint]
+    ).sum(axis=0)
+    all_pass: np.ndarray = n_filters_passed == len(list(Endpoint))
+
+    rows = []
+    for i, smi in enumerate(valid_smiles):
+        row: dict = {"smiles": smi}
+        for ep in Endpoint:
+            row[f"pred_{ep}"] = float(preds[ep][i])
+            row[f"pass_{ep}"] = bool(pass_masks[ep][i])
+        row["n_filters_passed"] = int(n_filters_passed[i])
+        row["is_hit"] = bool(all_pass[i])
+        row["is_near_miss"] = int(n_filters_passed[i]) == len(list(Endpoint)) - 1
+        rows.append(row)
 
     hits = [smi for smi, ok in zip(valid_smiles, all_pass) if ok]
 
@@ -186,6 +199,7 @@ def screen(smiles: list[str], n: int) -> dict:
         "n_hits": len(hits),
         "pct_hits": float(len(hits) / n_valid * 100) if n_valid else 0.0,
         "hits": hits,
+        "molecules": rows,
     }
 
 
@@ -218,9 +232,13 @@ def main() -> None:
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    hits_path = REPORTS_SCREENING / f"chembl_hits_{ts}.smi"
-    hits_path.write_text("\n".join(results["hits"]))
-    logger.info("Hits saved → %s", hits_path)
+    df = pd.DataFrame(results["molecules"])
+    csv_path = REPORTS_SCREENING / f"screen_{ts}.csv"
+    df.to_csv(csv_path, index=False)
+    logger.info("Molecules → %s  (%d hits, %d near-misses)",
+                csv_path.name,
+                results["n_hits"],
+                int(df["is_near_miss"].sum()))
 
     report = {
         "timestamp": datetime.now().isoformat(),
@@ -233,7 +251,7 @@ def main() -> None:
     }
     report_path = REPORTS_SCREENING / f"screen_{ts}.json"
     report_path.write_text(json.dumps(report, indent=2))
-    logger.info("Report  → %s", report_path)
+    logger.info("Summary → %s", report_path)
 
 
 if __name__ == "__main__":
