@@ -60,10 +60,10 @@ from src.screening.screen import _passes
     (Endpoint.HERG, 0.4,  False),
     (Endpoint.HERG, 0.3,  False),          # boundary: not strictly <
 
-    # LD50: log(LD50) > -2.0  (higher = less toxic)
-    (Endpoint.LD50, -1.0, True),
-    (Endpoint.LD50, -3.0, False),
-    (Endpoint.LD50, -2.0, False),          # boundary: not strictly >
+    # LD50: log10(LD50 mg/kg) > 2.0  (LD50 > 100 mg/kg; higher = less toxic)
+    (Endpoint.LD50,  3.0, True),
+    (Endpoint.LD50,  1.0, False),
+    (Endpoint.LD50,  2.0, False),          # boundary: not strictly >
 
     # DILI: p(liver injury) < 0.30  (strict: leading withdrawal reason)
     (Endpoint.DILI, 0.2,  True),

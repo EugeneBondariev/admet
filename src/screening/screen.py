@@ -50,7 +50,7 @@ CHEMBL_API = "https://www.ebi.ac.uk/chembl/api/data/molecule.json"
 #   HLM           — human liver microsome stability; unstable drugs are destroyed before reaching their target
 #   CLEARANCE     — rate the liver removes drug from blood (mL/min/kg); too high → too short half-life
 #   HERG          — cardiac potassium channel; blocking it causes fatal arrhythmia; major safety filter
-#   LD50          — acute oral toxicity; Y = log(LD50 mol/kg); higher → less toxic (needs more to kill)
+#   LD50          — acute oral toxicity; Y = log10(LD50 mg/kg); higher → less toxic (needs more to kill)
 #   DILI          — drug-induced liver injury; leading cause of post-market drug withdrawal
 #   CARCINOGENS   — cancer-causing potential; regulatory hard stop
 THRESHOLD_LABEL: dict[Endpoint, str] = {
@@ -63,7 +63,7 @@ THRESHOLD_LABEL: dict[Endpoint, str] = {
     Endpoint.HLM:           "p(stable) > 0.50",
     Endpoint.CLEARANCE:     "clearance < 150 mL/min/kg",
     Endpoint.HERG:          "p(hERG blocker) < 0.30",
-    Endpoint.LD50:          "log(LD50) > -2.0 mol/kg",
+    Endpoint.LD50:          "log(LD50 mg/kg) > 2.0",
     Endpoint.DILI:          "p(DILI) < 0.30",
     Endpoint.CARCINOGENS:   "p(carcinogen) < 0.20",
 }
@@ -90,7 +90,7 @@ def _passes(endpoint: Endpoint, pred: float) -> bool:
         case Endpoint.HERG:
             return pred < 0.3
         case Endpoint.LD50:
-            return pred > -2.0
+            return pred > 2.0
         case Endpoint.DILI:
             return pred < 0.3
         case Endpoint.CARCINOGENS:

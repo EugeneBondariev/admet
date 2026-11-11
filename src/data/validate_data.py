@@ -41,9 +41,9 @@ REGRESSION_BOUNDS: dict[Endpoint, tuple[float, float]] = {
     Endpoint.SOLUBILITY:    (-15.0, 5.0),     # logS (mol/L)
     Endpoint.LIPOPHILICITY: (-5.0,  10.0),    # logD (pH 7.4)
     Endpoint.PPBR:          (0.0,   100.0),   # plasma protein binding (%)
-    Endpoint.VDSS:          (0.0,   500.0),   # volume of distribution (L/kg)
+    Endpoint.VDSS:          (0.0,   1_000.0), # volume of distribution (L/kg); highly lipophilic drugs can exceed 500
     Endpoint.CLEARANCE:     (0.0,   5_000.0), # hepatic clearance (mL/min/kg)
-    Endpoint.LD50:          (-8.0,  1.0),     # log(LD50 mol/kg)
+    Endpoint.LD50:          (0.5,   6.0),     # log10(LD50 mg/kg); TDC docs say mol/kg but data is mg/kg
 }
 
 

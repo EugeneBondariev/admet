@@ -91,8 +91,8 @@ ENDPOINT_LABEL: dict[Endpoint, str] = {
     Endpoint.CLEARANCE: "hepatic clearance (mL/min/kg)",
     # Y=1 → blocker (bad)
     Endpoint.HERG: "hERG blocker (binary)",
-    # higher → less toxic (needs more mol/kg to kill); Y is log(LD50 mol/kg)
-    Endpoint.LD50: "acute toxicity LD50 (log mol/kg)",
+    # higher → less toxic (needs more mg/kg to kill); Y is log10(LD50 mg/kg)
+    Endpoint.LD50: "acute toxicity LD50 (log mg/kg)",
     # Y=1 → causes liver injury (bad)
     Endpoint.DILI: "drug-induced liver injury (binary)",
     # Y=1 → carcinogen (bad)
