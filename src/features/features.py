@@ -1,8 +1,19 @@
-"""Molecular featurization: Morgan fingerprints + RDKit descriptors + MACCS + Ro5 + PAINS.
+"""Molecular featurization: Morgan fingerprints + RDKit descriptors + MACCS + Ro5 + PAINS + 3D shape.
 
-Features: 2048-bit Morgan (radius=2), ~210 RDKit physicochemical descriptors,
-167-bit MACCS keys, Lipinski Ro5 violation count, PAINS alert flag.
+Features (10621 total):
+  2048  ECFP4  — Morgan radius=2, atom-type invariants
+  2048  ECFP6  — Morgan radius=3, larger substructures
+  2048  FCFP4  — Morgan radius=2, pharmacophore atom classes (H-bond donor/acceptor, aromatic, etc.)
+  2048  AtomPair — pairwise atom environments, orthogonal to Morgan
+  2048  TopTorsion — 4-atom chain sequences, captures conformational character
+  ~210  RDKit descriptors — physicochemical properties (MolWt, TPSA, etc.)
+   167  MACCS keys — 167 binary structural keys
+     1  Ro5 violations
+     1  PAINS flag
+     2  PMI ratios (PMI1/PMI3, PMI2/PMI3) — 3D shape (rod vs disc vs sphere)
+
 Rows with unparseable SMILES are dropped and logged.
+PMI ratios fall back to (0, 0) if conformer generation fails.
 """
 from __future__ import annotations
 
@@ -16,7 +27,7 @@ import numpy as np
 import pandas as pd
 from joblib import Memory
 from rdkit import Chem, RDLogger
-from rdkit.Chem import Descriptors, MACCSkeys, rdFingerprintGenerator, rdMolDescriptors
+from rdkit.Chem import AllChem, Descriptors, MACCSkeys, rdFingerprintGenerator, rdMolDescriptors
 from rdkit.Chem.FilterCatalog import FilterCatalog, FilterCatalogParams
 from rdkit.Chem.Scaffolds import MurckoScaffold
 from tqdm import tqdm
@@ -32,7 +43,14 @@ FP_RADIUS = 2
 FP_BITS = 2048
 MACCS_BITS = 167
 
-_morgan_gen = rdFingerprintGenerator.GetMorganGenerator(radius=FP_RADIUS, fpSize=FP_BITS)
+_morgan_gen  = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=FP_BITS)  # ECFP4
+_morgan6_gen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=FP_BITS)  # ECFP6
+_fcfp4_gen   = rdFingerprintGenerator.GetMorganGenerator(          # FCFP4: pharmacophore atom classes
+    radius=2, fpSize=FP_BITS,
+    atomInvariantsGenerator=rdFingerprintGenerator.GetMorganFeatureAtomInvGen(),
+)
+_ap_gen = rdFingerprintGenerator.GetAtomPairGenerator(fpSize=FP_BITS)
+_tt_gen = rdFingerprintGenerator.GetTopologicalTorsionGenerator(fpSize=FP_BITS)
 _DESC_FUNCS = Descriptors.descList  # list of (name, callable) pairs
 
 _pains_params = FilterCatalogParams()
@@ -40,11 +58,17 @@ _pains_params.AddCatalog(FilterCatalogParams.FilterCatalogs.PAINS)
 _PAINS_CATALOG = FilterCatalog(_pains_params)
 
 FEATURE_NAMES: list[str] = (
-    [f"fp_{i}" for i in range(FP_BITS)]
+    [f"ecfp4_{i}"  for i in range(FP_BITS)]
+    + [f"ecfp6_{i}"  for i in range(FP_BITS)]
+    + [f"fcfp4_{i}"  for i in range(FP_BITS)]
+    + [f"ap_{i}"     for i in range(FP_BITS)]
+    + [f"tt_{i}"     for i in range(FP_BITS)]
     + [name for name, _ in _DESC_FUNCS]
-    + [f"maccs_{i}" for i in range(MACCS_BITS)]
+    + [f"maccs_{i}"  for i in range(MACCS_BITS)]
     + ["ro5_violations", "pains_flag"]
+    + ["pmi_ratio_1", "pmi_ratio_2"]
 )
+# 5×2048 (fingerprints) + ~210 (RDKit descriptors) + 167 (MACCS) + 2 (Ro5, PAINS) + 2 (PMI) ≈ 10621
 FEATURE_HASH: str = hashlib.md5(",".join(FEATURE_NAMES).encode()).hexdigest()[:8]
 
 _memory = Memory(location=PROC_FEATURES, verbose=0)
@@ -58,8 +82,31 @@ def load_or_featurize(endpoint: str) -> tuple[np.ndarray, np.ndarray, list[str]]
     return featurize(df)
 
 
+def _pmi_ratios(mol: Chem.Mol) -> np.ndarray:
+    """PMI1/PMI3 and PMI2/PMI3 — encodes 3D shape (rod/disc/sphere). Falls back to (0, 0)."""
+    try:
+        mol_h = Chem.AddHs(mol)
+        if AllChem.EmbedMolecule(mol_h, AllChem.ETKDG()) == -1:
+            return np.zeros(2, dtype=np.float32)
+        mol_3d = Chem.RemoveHs(mol_h)
+        pmi3 = rdMolDescriptors.CalcPMI3(mol_3d)
+        if pmi3 == 0:
+            return np.zeros(2, dtype=np.float32)
+        return np.array(
+            [rdMolDescriptors.CalcPMI1(mol_3d) / pmi3,
+             rdMolDescriptors.CalcPMI2(mol_3d) / pmi3],
+            dtype=np.float32,
+        )
+    except Exception:
+        return np.zeros(2, dtype=np.float32)
+
+
 def _mol_to_features(mol: Chem.Mol) -> np.ndarray:
-    fp = _morgan_gen.GetFingerprintAsNumPy(mol).astype(np.float32)
+    ecfp4 = _morgan_gen.GetFingerprintAsNumPy(mol).astype(np.float32)
+    ecfp6 = _morgan6_gen.GetFingerprintAsNumPy(mol).astype(np.float32)
+    fcfp4 = _fcfp4_gen.GetFingerprintAsNumPy(mol).astype(np.float32)
+    ap    = _ap_gen.GetFingerprintAsNumPy(mol).astype(np.float32)
+    tt    = _tt_gen.GetFingerprintAsNumPy(mol).astype(np.float32)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         desc = np.array([fn(mol) for _, fn in _DESC_FUNCS], dtype=np.float32)
@@ -67,15 +114,16 @@ def _mol_to_features(mol: Chem.Mol) -> np.ndarray:
     ro5 = np.float32(sum([
         Descriptors.MolWt(mol) > 500,
         Descriptors.MolLogP(mol) > 5,
-        rdMolDescriptors.CalcNumHBD(mol) > 5,
-        rdMolDescriptors.CalcNumHBA(mol) > 10,
+        rdMolDescriptors.CalcNumHBD(mol) > 5,  # N-H and O-H groups that donate their Hs
+        rdMolDescriptors.CalcNumHBA(mol) > 10, # N, O that accept H
     ]))
     pains = np.float32(_PAINS_CATALOG.HasMatch(mol))
-    return np.concatenate([fp, desc, maccs, [ro5, pains]])
+    pmi   = _pmi_ratios(mol)
+    return np.concatenate([ecfp4, ecfp6, fcfp4, ap, tt, desc, maccs, [ro5, pains], pmi])
 
 
 def featurize(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    rows = [_mol_to_features(Chem.MolFromSmiles(smi)) for smi in df["Drug"]]
+    rows = [_mol_to_features(Chem.MolFromSmiles(smi)) for smi in tqdm(df["Drug"], desc="featurizing", unit="mol")]
     logger.info("Featurized %d molecules (%d features)", len(rows), len(FEATURE_NAMES))
     return np.vstack(rows), df["Y"].to_numpy(dtype=np.float32), list(df["Drug"])
 
