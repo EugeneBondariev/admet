@@ -57,29 +57,62 @@ _pains_params = FilterCatalogParams()
 _pains_params.AddCatalog(FilterCatalogParams.FilterCatalogs.PAINS)
 _PAINS_CATALOG = FilterCatalog(_pains_params)
 
+_FP_PREFIXES = ["ecfp4", "ecfp6", "fcfp4", "ap", "tt"]
+
 FEATURE_NAMES: list[str] = (
-    [f"ecfp4_{i}"  for i in range(FP_BITS)]
-    + [f"ecfp6_{i}"  for i in range(FP_BITS)]
-    + [f"fcfp4_{i}"  for i in range(FP_BITS)]
-    + [f"ap_{i}"     for i in range(FP_BITS)]
-    + [f"tt_{i}"     for i in range(FP_BITS)]
+    [f"{p}_{i}" for p in _FP_PREFIXES for i in range(FP_BITS)]
     + [name for name, _ in _DESC_FUNCS]
-    + [f"maccs_{i}"  for i in range(MACCS_BITS)]
+    + [f"maccs_{i}" for i in range(MACCS_BITS)]
     + ["ro5_violations", "pains_flag"]
     + ["pmi_ratio_1", "pmi_ratio_2"]
 )
-# 5×2048 (fingerprints) + ~210 (RDKit descriptors) + 167 (MACCS) + 2 (Ro5, PAINS) + 2 (PMI) ≈ 10621
 FEATURE_HASH: str = hashlib.md5(",".join(FEATURE_NAMES).encode()).hexdigest()[:8]
 
 _memory = Memory(location=PROC_FEATURES, verbose=0)
+_CHUNK_SIZE = 1_000
+
+
+def _featurize_chunked(df: pd.DataFrame, endpoint: str) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Featurize in chunks of _CHUNK_SIZE, saving each to disk so an interruption can resume."""
+    n = len(df)
+    n_chunks = ceil(n / _CHUNK_SIZE)
+    xs, ys, smiles_out = [], [], []
+
+    for idx in range(n_chunks):
+        chunk_path = PROC_FEATURES / f"{endpoint}_chunk_{idx:04d}.npz"
+        chunk_df = df.iloc[idx * _CHUNK_SIZE : (idx + 1) * _CHUNK_SIZE]
+
+        if chunk_path.exists():
+            logger.info("chunk %d/%d — loading from cache", idx + 1, n_chunks)
+            data = np.load(chunk_path, allow_pickle=True)
+            xs.append(data["X"])
+            ys.append(data["y"])
+            smiles_out.extend(data["smiles"].tolist())
+        else:
+            logger.info("chunk %d/%d — featurizing %d molecules", idx + 1, n_chunks, len(chunk_df))
+            X, y, smi = featurize(chunk_df)
+            np.savez(chunk_path, X=X, y=y, smiles=np.array(smi, dtype=object))
+            xs.append(X)
+            ys.append(y)
+            smiles_out.extend(smi)
+
+    X_all = np.vstack(xs)
+    y_all = np.concatenate(ys)
+
+    for idx in range(n_chunks):
+        chunk_path = PROC_FEATURES / f"{endpoint}_chunk_{idx:04d}.npz"
+        if chunk_path.exists():
+            chunk_path.unlink()
+
+    return X_all, y_all, smiles_out
 
 
 @_memory.cache
 def load_or_featurize(endpoint: str) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """Featurize endpoint data and persist to disk; recomputes when features change."""
     df = pd.read_parquet(INTERIM / f"{endpoint}.parquet")
-    logger.info("Featurizing %s ...", endpoint)
-    return featurize(df)
+    logger.info("Featurizing %s (%d molecules) ...", endpoint, len(df))
+    return _featurize_chunked(df=df, endpoint=endpoint)
 
 
 def _pmi_ratios(mol: Chem.Mol) -> np.ndarray:
