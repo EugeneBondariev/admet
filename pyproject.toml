@@ -13,6 +13,9 @@ include = ["src*"]
 
 [tool.pytest.ini_options]
 addopts = "-q -m 'not e2e'"
+filterwarnings = [
+    "ignore::DeprecationWarning:torch_geometric",
+]
 markers = [
     "e2e: end-to-end tests requiring a browser",
     "real_data: tests requiring downloaded data files",

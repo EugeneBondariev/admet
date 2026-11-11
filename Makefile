@@ -4,7 +4,7 @@
 PYTHON ?= .venv/Scripts/python.exe
 export PYTHONUNBUFFERED := 1
 
-.PHONY: help install install-dev freeze push typecheck lint test test-e2e fetch validate predict mlflow tune gnn screen active-learning
+.PHONY: help install install-dev freeze commit push typecheck lint test test-e2e coverage fetch validate fetch-chembl predict predict-merged mlflow tune gnn screen active-learning
 
 help:
 	@echo ""
@@ -14,18 +14,22 @@ help:
 	@echo "  freeze           Snapshot environment to requirements-lock.txt"
 	@echo ""
 	@echo "Quality:"
-	@echo "  push             Run typecheck + test, then git push"
+	@echo "  push             Run commit checks, then git push"
+	@echo "  commit           Run lint + typecheck + test; echoes 'All checks passed'"
 	@echo "  typecheck        Run mypy over src/"
 	@echo "  lint             Run ruff linter"
 	@echo "  test             Run the fast test suite (excludes e2e)"
+	@echo "  coverage         Run tests with line coverage report (src/ only)"
 	@echo "  test-e2e         Real-browser smoke tests (needs playwright)"
 	@echo ""
 	@echo "Data:"
 	@echo "  fetch            Download all ADMET datasets from TDC"
 	@echo "  validate         Re-validate all data files on disk"
+	@echo "  fetch-chembl     Fetch ChEMBL bioactivity data; saves *_merged.parquet alongside TDC"
 	@echo ""
 	@echo "Model:"
-	@echo "  predict          Train + evaluate all endpoints; saves models to models/ for screening"
+	@echo "  predict          Train + evaluate all endpoints (TDC data); saves models for screening"
+	@echo "  predict-merged   Same but CV uses TDC + ChEMBL merged data (requires fetch-chembl)"
 	@echo "  tune             Hyperparameter search with Optuna (saves to config/)"
 	@echo "  gnn              Train SchNet GNN with 3D geometry (GPU recommended)"
 	@echo "  screen           Virtual screening against ZINC20 lead-like (requires make predict first)"
@@ -43,7 +47,9 @@ install-dev: install
 freeze:
 	$(PYTHON) -m pip freeze > requirements-lock.txt
 
-push: lint typecheck test
+commit: lint typecheck test
+
+push: commit
 	git push
 
 lint:
@@ -55,6 +61,9 @@ typecheck:
 test:
 	$(PYTHON) -m pytest
 
+coverage:
+	$(PYTHON) -m pytest --cov=src --cov-report=term-missing
+
 test-e2e:
 	$(PYTHON) -m pytest -m e2e
 
@@ -64,8 +73,14 @@ fetch:
 validate:
 	$(PYTHON) -m src.data.validate_data
 
+fetch-chembl:
+	$(PYTHON) -m src.data.fetch_chembl_bioactivity
+
 predict:
 	$(PYTHON) -m src.models.predict
+
+predict-merged:
+	$(PYTHON) -m src.models.predict --source merged
 
 tune:
 	$(PYTHON) -m src.models.tune
