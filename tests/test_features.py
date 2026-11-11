@@ -300,7 +300,8 @@ def test_featurize_maccs_block_is_binary() -> None:
 
     X, _, _ = featurize(df)
 
-    maccs_start = len(FEATURE_NAMES) - MACCS_BITS - 2
+    # Layout tail: [..., maccs×167, ro5, pains, pmi_ratio_1, pmi_ratio_2]
+    maccs_start = len(FEATURE_NAMES) - MACCS_BITS - 4
     maccs_block = X[:, maccs_start : maccs_start + MACCS_BITS]
     assert set(np.unique(maccs_block)) <= {0.0, 1.0}
 
@@ -315,7 +316,8 @@ def test_featurize_ro5_violations_range() -> None:
 
     X, _, _ = featurize(df)
 
-    ro5_col = -2
+    # Layout tail: [..., ro5, pains, pmi_ratio_1, pmi_ratio_2]
+    ro5_col = -4
     assert X[0, ro5_col] == 0.0
     assert X[1, ro5_col] > 0.0
     assert 0.0 <= X[:, ro5_col].max() <= 4.0
@@ -330,7 +332,8 @@ def test_featurize_pains_flag() -> None:
 
     X, _, _ = featurize(df)
 
-    pains_col = -1
+    # Layout tail: [..., ro5, pains, pmi_ratio_1, pmi_ratio_2]
+    pains_col = -3
     assert X[0, pains_col] == 0.0
     assert X[1, pains_col] == 1.0
 
@@ -395,3 +398,37 @@ def test_load_or_featurize_results_are_aligned() -> None:
     assert y[1] == pytest.approx(2.5)
     assert smiles[0] == "CCO"
     assert smiles[1] == "c1ccccc1"
+
+
+def test_featurize_all_fp_blocks_are_binary() -> None:
+    df = pd.DataFrame({"Drug": ["CC(=O)Oc1ccccc1C(=O)O"], "Y": [0.0]})
+
+    X, _, _ = featurize(df)
+
+    # 5 consecutive FP blocks of FP_BITS each: ecfp4, ecfp6, fcfp4, ap, tt
+    for block_idx in range(5):
+        start = block_idx * FP_BITS
+        block = X[:, start : start + FP_BITS]
+        values = set(np.unique(block))
+        assert values <= {0.0, 1.0}, f"FP block {block_idx} has non-binary values: {values}"
+        assert block.sum() > 0, f"FP block {block_idx} is all zeros"
+
+
+def test_featurize_pmi_ratios_in_unit_interval() -> None:
+    df = pd.DataFrame({"Drug": ["CC(=O)Oc1ccccc1C(=O)O"], "Y": [0.0]})
+
+    X, _, _ = featurize(df)
+
+    pmi1 = float(X[0, -2])
+    pmi2 = float(X[0, -1])
+    assert 0.0 <= pmi1 <= 1.0, f"PMI ratio 1 out of [0,1]: {pmi1}"
+    assert 0.0 <= pmi2 <= 1.0, f"PMI ratio 2 out of [0,1]: {pmi2}"
+    assert pmi1 <= pmi2, f"PMI1/PMI3={pmi1} > PMI2/PMI3={pmi2} violates PMI1 ≤ PMI2 ≤ PMI3"
+
+
+def test_featurize_total_feature_count() -> None:
+    df = pd.DataFrame({"Drug": ["CCO"], "Y": [0.0]})
+
+    X, _, _ = featurize(df)
+
+    assert X.shape[1] == len(FEATURE_NAMES)
