@@ -22,6 +22,7 @@ from sklearn.metrics import mean_squared_error, roc_auc_score
 
 from src.active_learning.loop import run_active_learning_loop
 from src.active_learning.uncertainty import ConformalLGBM, MCDropoutGNN
+from src.cli import resolve_endpoints
 from src.constants import ENDPOINT_TASK, Endpoint, Task
 from src.features.features import load_or_featurize, scaffold_split
 from src.logging_config import setup_logging
@@ -320,7 +321,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Active learning simulation for ADMET endpoints"
     )
-    parser.add_argument("--endpoint", default=None, help="Single endpoint (default: all)")
+    parser.add_argument("--endpoint", default=None, help="Endpoint short key or prefix (default: all)")
     parser.add_argument(
         "--model",
         default="lgbm",
@@ -344,7 +345,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    endpoints = [Endpoint(args.endpoint)] if args.endpoint else list(Endpoint)
+    endpoints = resolve_endpoints(parser=parser, name=args.endpoint)
     models = ["lgbm", "gnn"] if args.model == "both" else [args.model]
     strategies = ["ucb", "explore", "random"] if args.strategy == "all" else [args.strategy]
 

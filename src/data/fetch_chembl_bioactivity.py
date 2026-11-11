@@ -25,6 +25,7 @@ import pandas as pd
 import requests
 from rdkit import Chem
 
+from src.cli import resolve_endpoints
 from src.constants import Endpoint
 from src.data.validate_data import is_valid_smiles
 from src.logging_config import setup_logging
@@ -276,11 +277,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Fetch ChEMBL bioactivity data to supplement TDC training sets"
     )
-    parser.add_argument("--endpoint", default=None, help="Single endpoint (default: all)")
+    parser.add_argument("--endpoint", default=None, help="Endpoint short key or prefix (default: all)")
     parser.add_argument("--force", action="store_true", help="Re-fetch even if cache exists")
     args = parser.parse_args()
 
-    endpoints = [Endpoint(args.endpoint)] if args.endpoint else list(Endpoint)
+    endpoints = resolve_endpoints(parser=parser, name=args.endpoint)
     for ep in endpoints:
         fetch_endpoint(endpoint=ep, force=args.force)
     logger.info("Done. Merged parquets saved to %s", INTERIM)

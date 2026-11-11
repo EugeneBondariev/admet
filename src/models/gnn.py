@@ -27,6 +27,7 @@ from sklearn.metrics import auc, mean_squared_error, precision_recall_curve, r2_
 from torch_geometric.loader import DataLoader  # noqa: E402
 from torch_geometric.nn import SchNet  # noqa: E402
 
+from src.cli import resolve_endpoints  # noqa: E402
 from src.constants import ENDPOINT_TASK, LOG_TRANSFORM, Endpoint, Task  # noqa: E402
 from src.features.features import scaffold_split  # noqa: E402
 from src.features.mol_graph import load_or_build_dataset  # noqa: E402
@@ -268,7 +269,7 @@ def run_gnn_endpoint(
 def main() -> None:
     setup_logging()
     parser = argparse.ArgumentParser(description="Train SchNet GNN for ADMET prediction")
-    parser.add_argument("--endpoint", default=None)
+    parser.add_argument("--endpoint", default=None, help="Endpoint short key or prefix (default: all)")
     parser.add_argument(
         "--epochs", type=int, default=MAX_EPOCHS,
         help=f"Max training epochs per endpoint (default {MAX_EPOCHS}; use 30 for a CPU smoke test)",
@@ -281,7 +282,7 @@ def main() -> None:
             "Consider --epochs 30 for a quick test."
         )
 
-    endpoints = [Endpoint(args.endpoint)] if args.endpoint else list(Endpoint)
+    endpoints = resolve_endpoints(parser=parser, name=args.endpoint)
 
     mlflow.set_tracking_uri(f"sqlite:///{MODELS_DIR / 'mlflow.db'}")
     mlflow.set_experiment("admet-gnn")

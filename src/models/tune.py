@@ -18,6 +18,7 @@ from lightgbm import LGBMClassifier, LGBMRegressor, early_stopping, log_evaluati
 from sklearn.metrics import mean_squared_error, roc_auc_score
 from sklearn.model_selection import StratifiedGroupKFold
 
+from src.cli import resolve_endpoints
 from src.constants import ENDPOINT_TASK, LOG_TRANSFORM, Endpoint, Task
 from src.features.features import get_scaffold_groups, load_or_featurize, quantile_bins
 from src.logging_config import setup_logging
@@ -130,11 +131,11 @@ def tune_endpoint(endpoint: Endpoint, n_trials: int = N_TRIALS_DEFAULT) -> dict:
 def main() -> None:
     setup_logging()
     parser = argparse.ArgumentParser(description="Tune LightGBM hyperparameters with Optuna")
-    parser.add_argument("--endpoint", default=None, help="Single endpoint to tune (default: all)")
-    parser.add_argument("--n-trials", type=int, default=N_TRIALS_DEFAULT)
+    parser.add_argument("--endpoint", default=None, help="Endpoint short key or prefix (default: all)")
+    parser.add_argument("--n-trials", type=int, default=N_TRIALS_DEFAULT, help=f"Optuna trials (default: {N_TRIALS_DEFAULT})")
     args = parser.parse_args()
 
-    endpoints = [Endpoint(args.endpoint)] if args.endpoint else list(Endpoint)
+    endpoints = resolve_endpoints(parser=parser, name=args.endpoint)
 
     mlflow.set_tracking_uri(f"sqlite:///{MODELS_DIR / 'mlflow.db'}")
     mlflow.set_experiment("admet-tuning")

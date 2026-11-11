@@ -11,11 +11,11 @@ import logging
 import pandas as pd
 from rdkit import Chem, RDLogger
 
-RDLogger.DisableLog("rdApp.warning")
-
 from src.constants import ENDPOINT_TASK, Endpoint, Task
 from src.logging_config import setup_logging
 from src.paths import INTERIM
+
+RDLogger.DisableLog("rdApp.warning")
 
 logger = logging.getLogger(__name__)
 
