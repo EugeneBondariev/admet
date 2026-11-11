@@ -1,4 +1,4 @@
-"""Active learning simulation for all 6 ADMET endpoints.
+"""Active learning simulation for all 12 ADMET endpoints.
 
 Simulates the closed-loop drug discovery workflow: start with a small seed set,
 iteratively acquire the most informative compounds (by UCB or explore strategy),

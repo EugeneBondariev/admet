@@ -1,7 +1,7 @@
-"""Virtual screening against ChEMBL lead-like compounds.
+"""Virtual screening against ChEMBL drug-like compounds.
 
-Loads 6 trained LightGBM models (from make predict), featurizes SMILES from
-ChEMBL (MW ≤ 500, logP ≤ 5), applies drug-likeness thresholds to each
+Loads 12 trained LightGBM models (from make predict), featurizes SMILES from
+ChEMBL (all 4 Ro5 rules: MW ≤ 500, logP ≤ 5, HBD ≤ 5, HBA ≤ 10), applies drug-likeness thresholds to each
 endpoint, and reports how many candidates survive all filters.
 Run: python -m src.screening.screen [--n-compounds N]
 
@@ -19,11 +19,12 @@ import numpy as np
 import pandas as pd
 import requests
 from lightgbm import LGBMClassifier, LGBMRegressor
+from rdkit import Chem
 
 from src.constants import ENDPOINT_TASK, LOG_TRANSFORM, Endpoint, Task
 from src.features.features import FEATURE_HASH, featurize_smiles
 from src.logging_config import setup_logging
-from src.paths import EXTERNAL, MODELS_LGBM, PROC_FEATURES, REPORTS_SCREENING
+from src.paths import EXTERNAL, INTERIM, MODELS_LGBM, PROC_FEATURES, REPORTS_SCREENING
 
 logger = logging.getLogger(__name__)
 
@@ -32,33 +33,70 @@ CHEMBL_API = "https://www.ebi.ac.uk/chembl/api/data/molecule.json"
 # Thresholds for each endpoint.
 # Regression: threshold on predicted value (after expm1 for log-transformed endpoints).
 # Classification: threshold on p(positive class = 1).
-#   CYP3A4  Y=1 → inhibitor     → want p < 0.50
-#   HLM     Y=1 → stable        → want p > 0.50  (verify: 0=unstable, 1=stable in TDC hlm)
-#   hERG    Y=1 → blocker       → want p < 0.30  (strict cardiac safety)
+#   CYP3A4      Y=1 → inhibitor (blocks the enzyme)      → BAD  → want p < 0.50
+#   HLM         Y=1 → stable (survives liver enzymes)     → GOOD → want p > 0.50
+#   hERG        Y=1 → blocker (blocks cardiac channel)    → BAD  → want p < 0.30  (strict: causes arrhythmia)
+#   BBB         Y=1 → crosses blood-brain barrier         → context-dependent; p < 0.50 for non-CNS screening
+#   DILI        Y=1 → drug-induced liver injury           → BAD  → want p < 0.30  (strict: major withdrawal reason)
+#   CARCINOGENS Y=1 → carcinogen                         → BAD  → want p < 0.20  (strict: safety-critical)
+#
+# Endpoint descriptions:
+#   SOLUBILITY    — how well the drug dissolves in water (logS); too insoluble → never absorbed from gut
+#   BBB           — blood-brain barrier penetration; undesirable for non-CNS drugs (CNS side effects)
+#   LIPOPHILICITY — fat vs water affinity (logD); too polar → can't cross membranes; too greasy → won't dissolve
+#   PPBR          — plasma protein binding rate (%); >90% bound → little free drug reaches target
+#   VDSS          — volume of distribution (L/kg); very high → accumulates in tissues, slow elimination
+#   CYP3A4        — liver enzyme metabolising ~50% of drugs; inhibiting it causes dangerous drug-drug interactions
+#   HLM           — human liver microsome stability; unstable drugs are destroyed before reaching their target
+#   CLEARANCE     — rate the liver removes drug from blood (mL/min/kg); too high → too short half-life
+#   HERG          — cardiac potassium channel; blocking it causes fatal arrhythmia; major safety filter
+#   LD50          — acute oral toxicity; Y = log(LD50 mol/kg); higher → less toxic (needs more to kill)
+#   DILI          — drug-induced liver injury; leading cause of post-market drug withdrawal
+#   CARCINOGENS   — cancer-causing potential; regulatory hard stop
 THRESHOLD_LABEL: dict[Endpoint, str] = {
     Endpoint.SOLUBILITY:    "logS > -5.0 mol/L",
+    Endpoint.BBB:           "p(BBB penetrant) < 0.50",
     Endpoint.LIPOPHILICITY: "-1.0 ≤ logD ≤ 5.0",
+    Endpoint.PPBR:          "PPBR < 90%",
+    Endpoint.VDSS:          "VDss < 20 L/kg",
     Endpoint.CYP3A4:        "p(inhibitor) < 0.50",
     Endpoint.HLM:           "p(stable) > 0.50",
     Endpoint.CLEARANCE:     "clearance < 150 mL/min/kg",
     Endpoint.HERG:          "p(hERG blocker) < 0.30",
+    Endpoint.LD50:          "log(LD50) > -2.0 mol/kg",
+    Endpoint.DILI:          "p(DILI) < 0.30",
+    Endpoint.CARCINOGENS:   "p(carcinogen) < 0.20",
 }
 
 
 def _passes(endpoint: Endpoint, pred: float) -> bool:
-    if endpoint == Endpoint.SOLUBILITY:
-        return pred > -5.0
-    if endpoint == Endpoint.LIPOPHILICITY:
-        return -1.0 <= pred <= 5.0
-    if endpoint == Endpoint.CLEARANCE:
-        return pred < 150.0
-    if endpoint == Endpoint.CYP3A4:
-        return pred < 0.5
-    if endpoint == Endpoint.HLM:
-        return pred > 0.5
-    if endpoint == Endpoint.HERG:
-        return pred < 0.3
-    raise ValueError(f"No threshold defined for {endpoint}")
+    match endpoint:
+        case Endpoint.SOLUBILITY:
+            return pred > -5.0
+        case Endpoint.BBB:
+            return pred < 0.5
+        case Endpoint.LIPOPHILICITY:
+            return -1.0 <= pred <= 5.0
+        case Endpoint.PPBR:
+            return pred < 90.0
+        case Endpoint.VDSS:
+            return pred < 20.0
+        case Endpoint.CYP3A4:
+            return pred < 0.5
+        case Endpoint.HLM:
+            return pred > 0.5
+        case Endpoint.CLEARANCE:
+            return pred < 150.0
+        case Endpoint.HERG:
+            return pred < 0.3
+        case Endpoint.LD50:
+            return pred > -2.0
+        case Endpoint.DILI:
+            return pred < 0.3
+        case Endpoint.CARCINOGENS:
+            return pred < 0.2
+        case _:
+            raise ValueError(f"No threshold defined for {endpoint}")
 
 
 def _load_model(endpoint: Endpoint) -> LGBMClassifier | LGBMRegressor:
@@ -85,7 +123,7 @@ def _predict(
 
 
 def _fetch_chembl(n: int) -> list[str]:
-    cache = EXTERNAL / f"chembl_lead_like_{n}.smi"
+    cache = EXTERNAL / f"chembl_drug_like_{n}.smi"
     if cache.exists():
         lines = cache.read_text().splitlines()
         if len(lines) < n:
@@ -98,7 +136,7 @@ def _fetch_chembl(n: int) -> list[str]:
         logger.info("Loading %d compounds from cache (%s)", len(lines), cache.name)
         return lines
 
-    logger.info("Downloading %d lead-like compounds from ChEMBL (MW ≤ 500, logP ≤ 5) ...", n)
+    logger.info("Downloading %d drug-like compounds from ChEMBL (MW ≤ 500, logP ≤ 5) ...", n)
     smiles: list[str] = []
     offset = 0
     batch = 1000
@@ -109,8 +147,8 @@ def _fetch_chembl(n: int) -> list[str]:
                 "format": "json",
                 "limit": min(batch, n - len(smiles)),
                 "offset": offset,
-                "molecule_properties__full_mwt__lte": 500,
-                "molecule_properties__alogp__lte": 5,
+                "molecule_properties__full_mwt__lte": 500,  # MW (molecular weight) ≤ 500 Da
+                "molecule_properties__alogp__lte": 5,       # alogP (atomic logP: lipophilicity from atom contributions) ≤ 5
             },
             timeout=30,
         )
@@ -133,8 +171,8 @@ def _fetch_chembl(n: int) -> list[str]:
 
 
 def _load_or_featurize(smiles: list[str], n: int) -> tuple[np.ndarray, list[str]]:
-    cache = PROC_FEATURES / f"chembl_lead_like_{n}_features.npz"
-    smiles_file = EXTERNAL / f"chembl_lead_like_{n}.smi"
+    cache = PROC_FEATURES / f"chembl_drug_like_{n}_features.npz"
+    smiles_file = EXTERNAL / f"chembl_drug_like_{n}.smi"
     if cache.exists():
         data = np.load(cache, allow_pickle=False)
         cached_hash = str(data["feature_hash"]) if "feature_hash" in data else None
@@ -154,12 +192,32 @@ def _load_or_featurize(smiles: list[str], n: int) -> tuple[np.ndarray, list[str]
     return X, valid_smiles
 
 
+def _training_set_canonical_smiles() -> set[str]:
+    """Return canonical SMILES of every molecule seen during training."""
+    seen: set[str] = set()
+    for ep in Endpoint:
+        path = INTERIM / f"{ep}.parquet"
+        if not path.exists():
+            continue
+        for smi in pd.read_parquet(path)["Drug"]:
+            mol = Chem.MolFromSmiles(smi)
+            if mol is not None:
+                seen.add(Chem.MolToSmiles(mol))
+    logger.info("Training set: %d unique canonical SMILES across all endpoints", len(seen))
+    return seen
+
+
 def screen(smiles: list[str], n: int) -> dict:
-    """Run all 6 models on SMILES, apply thresholds, return structured results."""
+    """Run all 12 models on SMILES, apply thresholds, return structured results."""
     X, valid_smiles = _load_or_featurize(smiles, n)
     n_valid = len(valid_smiles)
+    training_smiles = _training_set_canonical_smiles()
 
     models = {ep: _load_model(ep) for ep in Endpoint}
+    # shape (n_molecules,) per endpoint
+    # classification → p(positive class), range [0, 1]
+    # regression     → physical units after expm1 for log-transformed endpoints (Clearance only)
+    #                   Solubility: logS (~[-10, 2]), Lipophilicity: logD (~[-2, 7]), Clearance: mL/min/kg (~[0, 300])
     preds: dict[Endpoint, np.ndarray] = {
         ep: _predict(models[ep], X, ep) for ep in Endpoint
     }
@@ -174,6 +232,8 @@ def screen(smiles: list[str], n: int) -> dict:
 
     rows = []
     for i, smi in enumerate(valid_smiles):
+        mol = Chem.MolFromSmiles(smi)
+        canonical = Chem.MolToSmiles(mol) if mol is not None else smi
         row: dict = {"smiles": smi}
         for ep in Endpoint:
             row[f"pred_{ep}"] = float(preds[ep][i])
@@ -181,6 +241,7 @@ def screen(smiles: list[str], n: int) -> dict:
         row["n_filters_passed"] = int(n_filters_passed[i])
         row["is_hit"] = bool(all_pass[i])
         row["is_near_miss"] = int(n_filters_passed[i]) == len(list(Endpoint)) - 1
+        row["in_training_set"] = canonical in training_smiles
         rows.append(row)
 
     hits = [smi for smi, ok in zip(valid_smiles, all_pass) if ok]
@@ -205,7 +266,7 @@ def screen(smiles: list[str], n: int) -> dict:
 
 def main() -> None:
     setup_logging()
-    parser = argparse.ArgumentParser(description="Virtual screening against ChEMBL lead-like compounds")
+    parser = argparse.ArgumentParser(description="Virtual screening against ChEMBL drug-like compounds")
     parser.add_argument(
         "--n-compounds", type=int, default=100_000,
         help="Number of compounds to download from ChEMBL (default 100000). Usage: N=value",
@@ -214,7 +275,7 @@ def main() -> None:
 
     try:
         smiles = _fetch_chembl(args.n_compounds)
-        source = f"ChEMBL lead-like (n={args.n_compounds})"
+        source = f"ChEMBL drug-like (n={args.n_compounds})"
     except Exception as e:
         logger.error("ChEMBL download failed: %s", e)
         raise SystemExit(1)
@@ -228,17 +289,21 @@ def main() -> None:
     logger.info("\nFilter results:")
     for _, ep_res in results["per_endpoint"].items():
         logger.info("  %-35s %6d pass  (%5.1f%%)", ep_res["label"], ep_res["n_pass"], ep_res["pct_pass"])
-    logger.info("\nAll 6 filters passed: %d compounds (%.1f%%)", results["n_hits"], results["pct_hits"])
+    logger.info("\nAll 12 filters passed: %d compounds (%.1f%%)", results["n_hits"], results["pct_hits"])
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     df = pd.DataFrame(results["molecules"])
+    n_in_training = int(df["in_training_set"].sum())
     csv_path = REPORTS_SCREENING / f"screen_{ts}.csv"
     df.to_csv(csv_path, index=False)
     logger.info("Molecules → %s  (%d hits, %d near-misses)",
                 csv_path.name,
                 results["n_hits"],
                 int(df["is_near_miss"].sum()))
+    logger.info("In training set: %d / %d  (%.1f%%)",
+                n_in_training, results["n_valid"],
+                100 * n_in_training / results["n_valid"] if results["n_valid"] else 0.0)
 
     report = {
         "timestamp": datetime.now().isoformat(),

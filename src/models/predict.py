@@ -8,6 +8,7 @@ Run: python -m src.models.predict
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import logging
@@ -31,6 +32,7 @@ from sklearn.model_selection import StratifiedGroupKFold, train_test_split
 from src.constants import ENDPOINT_TASK, LOG_TRANSFORM, Endpoint, Task
 from src.features.features import (
     FEATURE_HASH,
+    FEATURE_NAMES,
     get_scaffold_groups,
     load_or_featurize,
     quantile_bins,
@@ -116,21 +118,22 @@ def _run_one_fold(
 
 
 def run_endpoint(
-    endpoint: Endpoint, n_folds: int = N_FOLDS
+    endpoint: Endpoint, n_folds: int = N_FOLDS, source: str = "tdc"
 ) -> dict[str, tuple[float, float]]:
     """Evaluate one endpoint with stratified scaffold GroupKFold cross-validation.
 
     Returns {metric: (mean, sd)}. No scaffold appears in both train and test
     within any fold — each fold tests on a chemically distinct held-out set.
     CV results are cached; reruns with unchanged features and params are instant.
+    source: "tdc" (default) or "merged" (TDC + ChEMBL, requires make fetch-chembl first).
     """
-    logger.info("--- %s ---", endpoint)
-
-    X, y, smiles = load_or_featurize(endpoint=endpoint)
+    logger.info("--- %s (source=%s) ---", endpoint, source)
+    endpoint_key = str(endpoint) if source == "tdc" else f"{endpoint}_{source}"
+    X, y, smiles = load_or_featurize(endpoint=endpoint_key)
 
     params = _model_params(endpoint)
     params_hash = hashlib.md5(json.dumps(params, sort_keys=True).encode()).hexdigest()[:8]
-    cv_cache = MODELS_LGBM / f"{endpoint}_cv_cache.json"
+    cv_cache = MODELS_LGBM / f"{endpoint_key}_cv_cache.json"
 
     if cv_cache.exists():
         cached = json.loads(cv_cache.read_text())
@@ -192,9 +195,22 @@ def train_and_save(endpoint: Endpoint) -> None:
     meta.write_text(json.dumps({"feature_hash": FEATURE_HASH, "params_hash": params_hash}))
     logger.info("Saved model → %s", out.name)
 
+    gains = model.booster_.feature_importance(importance_type="gain")
+    importance = dict(sorted(zip(FEATURE_NAMES, gains.tolist()), key=lambda x: x[1], reverse=True))
+    mlflow.log_dict(importance, f"feature_importance_{endpoint}.json")
+
 
 def main() -> None:
     setup_logging()
+    parser = argparse.ArgumentParser(description="Train and evaluate LightGBM ADMET models")
+    parser.add_argument(
+        "--source",
+        default="tdc",
+        choices=["tdc", "merged"],
+        help="Training data source: tdc (default) or merged (TDC + ChEMBL, requires make fetch-chembl)",
+    )
+    args = parser.parse_args()
+
     mlflow.set_tracking_uri(f"sqlite:///{MODELS_DIR / 'mlflow.db'}")
     mlflow.set_experiment("admet")
 
@@ -202,9 +218,9 @@ def main() -> None:
     results: dict[str, dict[str, tuple[float, float]]] = {}
 
     with mlflow.start_run(run_name=run_ts.strftime("%Y%m%d_%H%M%S")):
-        mlflow.log_params({**_LGBM_BASE, "n_folds": N_FOLDS})
+        mlflow.log_params({**_LGBM_BASE, "n_folds": N_FOLDS, "source": args.source})
         for endpoint in Endpoint:
-            metrics = run_endpoint(endpoint)
+            metrics = run_endpoint(endpoint=endpoint, source=args.source)
             results[endpoint] = metrics
             for name, (mean, sd) in metrics.items():
                 # sd is logged alongside the mean: a mean without its spread
