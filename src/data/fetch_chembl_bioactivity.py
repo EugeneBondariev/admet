@@ -77,16 +77,10 @@ _QUERIES: dict[Endpoint, _Query] = {
         confidence_score_gte=None,
         value_bounds=(-5.0, 10.0),  # physically valid LogD range; filters ChEMBL data-entry errors
     ),
-    Endpoint.SOLUBILITY: _Query(
-        target_chembl_id=None,
-        standard_type="LogS",
-        assay_type="P",
-        confidence_score_gte=None,
-        value_bounds=(-15.0, 2.0),  # physically valid LogS range
-    ),
 }
 
 _SKIPPED: frozenset[Endpoint] = frozenset({
+    Endpoint.SOLUBILITY,  # ChEMBL stores solubility as "Solubility" in µg/mL, not LogS
     Endpoint.HLM,         # mixed microsomal/hepatocyte formats, inconsistent units
     Endpoint.CLEARANCE,   # hepatocyte vs microsomal vs in vivo — too heterogeneous
     Endpoint.BBB,         # in vivo PK parameter, not in ChEMBL activity format
