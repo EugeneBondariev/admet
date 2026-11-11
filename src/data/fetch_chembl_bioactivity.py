@@ -43,11 +43,12 @@ class _Query:
     standard_type: str            # e.g. "IC50", "LogD", "LogS"
     assay_type: str               # B=binding, F=functional, P=physicochemical
     confidence_score_gte: int | None = None  # None = no filter (physicochemical assays)
-    # unit → multiplier to normalize to base unit (nM for IC50).
+    # unit -> multiplier to normalize to base unit (nM for IC50).
     # Empty dict = accept all unit strings at face value (dimensionless: LogD, LogS).
     unit_multipliers: dict[str, float] = field(default_factory=dict)
     threshold: float | None = None      # None = regression; float = binarize at this value
-    positive_if_lt: bool | None = None  # True: Y=1 if value < threshold (e.g. IC50 → blocker)
+    positive_if_lt: bool | None = None  # True: Y=1 if value < threshold (e.g. IC50 -> blocker)
+    value_bounds: tuple[float, float] | None = None  # drop rows outside (lo, hi) before deduplication
 
 
 _QUERIES: dict[Endpoint, _Query] = {
@@ -58,7 +59,7 @@ _QUERIES: dict[Endpoint, _Query] = {
         confidence_score_gte=8,
         unit_multipliers={"pM": 0.001, "nM": 1.0, "uM": 1_000.0, "mM": 1_000_000.0},
         threshold=10_000.0,   # 10 µM in nM — matches herg_karim TDC binarization
-        positive_if_lt=True,  # IC50 < 10 µM → blocker (Y=1)
+        positive_if_lt=True,  # IC50 < 10 µM -> blocker (Y=1)
     ),
     Endpoint.CYP3A4: _Query(
         target_chembl_id="CHEMBL340",  # CYP3A4 liver enzyme
@@ -67,21 +68,21 @@ _QUERIES: dict[Endpoint, _Query] = {
         confidence_score_gte=8,
         unit_multipliers={"pM": 0.001, "nM": 1.0, "uM": 1_000.0, "mM": 1_000_000.0},
         threshold=10_000.0,   # 10 µM in nM — matches CYP3A4_Veith TDC binarization
-        positive_if_lt=True,  # IC50 < 10 µM → inhibitor (Y=1)
+        positive_if_lt=True,  # IC50 < 10 µM -> inhibitor (Y=1)
     ),
     Endpoint.LIPOPHILICITY: _Query(
         target_chembl_id=None,
         standard_type="LogD",
         assay_type="P",
         confidence_score_gte=None,
-        # LogD is dimensionless — accept any unit string ChEMBL returns
+        value_bounds=(-5.0, 10.0),  # physically valid LogD range; filters ChEMBL data-entry errors
     ),
     Endpoint.SOLUBILITY: _Query(
         target_chembl_id=None,
         standard_type="LogS",
         assay_type="P",
         confidence_score_gte=None,
-        # LogS is dimensionless — accept any unit string ChEMBL returns
+        value_bounds=(-15.0, 2.0),  # physically valid LogS range
     ),
 }
 
@@ -148,7 +149,7 @@ def _fetch_raw(query: _Query, endpoint: Endpoint) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
     df.to_parquet(cache, index=False)
-    logger.info("Fetched %d raw activities for %s → %s", len(df), endpoint, cache.name)
+    logger.info("Fetched %d raw activities for %s -> %s", len(df), endpoint, cache.name)
     return df
 
 
@@ -169,6 +170,15 @@ def _curate(df: pd.DataFrame, query: _Query, endpoint: Endpoint) -> pd.DataFrame
             lambda r: r["value"] * query.unit_multipliers[r["units"]], axis=1
         )
 
+    if query.value_bounds is not None:
+        lo, hi = query.value_bounds
+        before = len(df)
+        df = df[(df["value"] >= lo) & (df["value"] <= hi)].copy()
+        if dropped := before - len(df):
+            logger.info("  Dropped %d rows outside value bounds [%g, %g]", dropped, lo, hi)
+        if df.empty:
+            return pd.DataFrame(columns=["Drug", "Y"])
+
     # Canonicalize SMILES via RDKit so duplicates across different SMILES representations merge
     canonical: list[str | None] = []
     for smi in df["smiles"]:
@@ -178,7 +188,7 @@ def _curate(df: pd.DataFrame, query: _Query, endpoint: Endpoint) -> pd.DataFrame
     df["Drug"] = canonical
     df = df.dropna(subset=["Drug"])
 
-    # Same molecule measured multiple times in different assays → take median
+    # Same molecule measured multiple times in different assays -> take median
     df = df.groupby("Drug")[["value"]].median().reset_index()
 
     # Binarize for classification endpoints
@@ -203,7 +213,7 @@ def _curate(df: pd.DataFrame, query: _Query, endpoint: Endpoint) -> pd.DataFrame
         )
     else:
         logger.info(
-            "%s curated: %d molecules, Y ∈ [%.2f, %.2f]",
+            "%s curated: %d molecules, Y in [%.2f, %.2f]",
             endpoint, len(df), float(df["Y"].min()), float(df["Y"].max()),
         )
     return df
@@ -262,11 +272,11 @@ def fetch_endpoint(endpoint: Endpoint, force: bool = False) -> None:
         return
 
     curated_df.to_parquet(chembl_path, index=False)
-    logger.info("ChEMBL-only → %s  (%d molecules)", chembl_path.name, len(curated_df))
+    logger.info("ChEMBL-only -> %s  (%d molecules)", chembl_path.name, len(curated_df))
 
     merged_df = _merge_with_tdc(chembl_df=curated_df, endpoint=endpoint)
     merged_df.to_parquet(merged_path, index=False)
-    logger.info("Merged     → %s  (%d molecules)", merged_path.name, len(merged_df))
+    logger.info("Merged     -> %s  (%d molecules)", merged_path.name, len(merged_df))
 
 
 def main() -> None:

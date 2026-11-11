@@ -77,6 +77,26 @@ def test_curate_deduplicates_by_taking_median() -> None:
     assert result["Y"].iloc[0] == 1.0  # median 2000 nM < 10000 → positive
 
 
+def test_curate_value_bounds_drops_outliers() -> None:
+    logd_query = _Query(
+        target_chembl_id=None,
+        standard_type="LogD",
+        assay_type="P",
+        confidence_score_gte=None,
+        value_bounds=(-5.0, 10.0),
+    )
+    df = pd.DataFrame({
+        "smiles": ["CCO", "c1ccccc1", "CC(C)C"],
+        "value":  [2.0, 4486.5, -6.0],  # 4486.5 and -6.0 are outside bounds
+        "units":  ["", "", ""],
+    })
+
+    result = _curate(df=df, query=logd_query, endpoint=Endpoint.LIPOPHILICITY)
+
+    assert len(result) == 1
+    assert np.isclose(result["Y"].iloc[0], 2.0)
+
+
 def test_curate_regression_preserves_values() -> None:
     logd_query = _Query(
         target_chembl_id=None,
