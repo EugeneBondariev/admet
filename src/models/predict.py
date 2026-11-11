@@ -38,7 +38,7 @@ from src.features.features import (
     quantile_bins,
 )
 from src.logging_config import setup_logging
-from src.paths import CONFIG, MODELS_DIR, MODELS_LGBM, REPORTS_PREDICT
+from src.paths import CONFIG, INTERIM, MODELS_DIR, MODELS_LGBM, REPORTS_PREDICT
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +127,9 @@ def run_endpoint(
     CV results are cached; reruns with unchanged features and params are instant.
     source: "tdc" (default) or "merged" (TDC + ChEMBL, requires make fetch-chembl first).
     """
+    if source != "tdc" and not (INTERIM / f"{endpoint}_{source}.parquet").exists():
+        logger.warning("%s: no %s file found, falling back to TDC data", endpoint, source)
+        source = "tdc"
     logger.info("--- %s (source=%s) ---", endpoint, source)
     endpoint_key = str(endpoint) if source == "tdc" else f"{endpoint}_{source}"
     X, y, smiles = load_or_featurize(endpoint=endpoint_key)
