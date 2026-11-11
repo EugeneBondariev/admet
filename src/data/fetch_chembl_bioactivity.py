@@ -243,9 +243,7 @@ def _merge_with_tdc(chembl_df: pd.DataFrame, endpoint: Endpoint) -> pd.DataFrame
 
 def fetch_endpoint(endpoint: Endpoint, force: bool = False) -> None:
     if endpoint in _SKIPPED:
-        logger.info(
-            "Skipping %s — HLM/Clearance assay formats too heterogeneous in ChEMBL", endpoint
-        )
+        logger.info("Skipping %s — no clean ChEMBL equivalent (see _SKIPPED)", endpoint)
         return
 
     chembl_path = INTERIM / f"{endpoint}_chembl.parquet"
