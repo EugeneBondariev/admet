@@ -1,6 +1,6 @@
 """Download all ADMET datasets from TDC and convert them to parquet.
 
-TDC writes its own .tab download into data/raw/ (immutable source of truth);
+TDC writes its own .tab download into data/external/ (third-party source data);
 this module converts each to data/interim/{endpoint}.parquet.
 
 Data source: Therapeutics Data Commons (https://tdcommons.ai)
@@ -15,7 +15,7 @@ from tdc.single_pred import ADME, Tox
 from src.constants import ENDPOINT_TDC_GROUP, Endpoint, TDCGroup
 from src.data.validate_data import is_valid_smiles
 from src.logging_config import setup_logging
-from src.paths import INTERIM, RAW
+from src.paths import EXTERNAL, INTERIM
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +29,9 @@ def fetch_endpoint(endpoint: Endpoint, force: bool = False) -> None:
         return
     logger.info("Fetching %s ...", endpoint)
     cls = _TDC_CLASS[ENDPOINT_TDC_GROUP[endpoint]]
-    # path=RAW keeps TDC's .tab download in data/raw/ instead of ./data, which
-    # it defaults to — that default is relative to the shell's cwd, not the project.
-    df = cls(name=endpoint, path=str(RAW)).get_data()
+    # path=EXTERNAL keeps TDC's .tab download in data/external/ instead of ./data,
+    # which it defaults to — that default is relative to the shell's cwd, not the project.
+    df = cls(name=endpoint, path=str(EXTERNAL)).get_data()
     df["Drug"] = df["Drug"].astype(str)
     df["Y"] = df["Y"].astype(float)
     before = len(df)

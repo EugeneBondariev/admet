@@ -23,18 +23,27 @@ def is_valid_smiles(smiles: str) -> bool:
 
 
 MIN_ROWS: dict[Endpoint, int] = {
-    Endpoint.SOLUBILITY: 5000,
-    Endpoint.LIPOPHILICITY: 2000,
-    Endpoint.CYP3A4: 5000,
-    Endpoint.HLM: 3000,
-    Endpoint.CLEARANCE: 500,
-    Endpoint.HERG: 8000,
+    Endpoint.SOLUBILITY:    5_000,
+    Endpoint.BBB:           1_500,
+    Endpoint.LIPOPHILICITY: 2_000,
+    Endpoint.PPBR:          1_500,
+    Endpoint.VDSS:            800,
+    Endpoint.CYP3A4:        5_000,
+    Endpoint.HLM:           3_000,
+    Endpoint.CLEARANCE:       500,
+    Endpoint.HERG:          8_000,
+    Endpoint.LD50:          5_000,
+    Endpoint.DILI:            350,
+    Endpoint.CARCINOGENS:     200,
 }
 
 REGRESSION_BOUNDS: dict[Endpoint, tuple[float, float]] = {
-    Endpoint.SOLUBILITY: (-15.0, 5.0),       # logS range
-    Endpoint.LIPOPHILICITY: (-5.0, 10.0),     # logD range
-    Endpoint.CLEARANCE: (0.0, 5000.0),        # mL/min/kg
+    Endpoint.SOLUBILITY:    (-15.0, 5.0),     # logS (mol/L)
+    Endpoint.LIPOPHILICITY: (-5.0,  10.0),    # logD (pH 7.4)
+    Endpoint.PPBR:          (0.0,   100.0),   # plasma protein binding (%)
+    Endpoint.VDSS:          (0.0,   500.0),   # volume of distribution (L/kg)
+    Endpoint.CLEARANCE:     (0.0,   5_000.0), # hepatic clearance (mL/min/kg)
+    Endpoint.LD50:          (-8.0,  1.0),     # log(LD50 mol/kg)
 }
 
 
