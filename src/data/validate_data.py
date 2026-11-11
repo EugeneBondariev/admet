@@ -9,7 +9,9 @@ from __future__ import annotations
 import logging
 
 import pandas as pd
-from rdkit import Chem
+from rdkit import Chem, RDLogger
+
+RDLogger.DisableLog("rdApp.warning")
 
 from src.constants import ENDPOINT_TASK, Endpoint, Task
 from src.logging_config import setup_logging
