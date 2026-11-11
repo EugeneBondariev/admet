@@ -94,7 +94,10 @@ def validate_endpoint(endpoint: Endpoint) -> bool:
         lo, hi = REGRESSION_BOUNDS[endpoint]
         out_of_range = ((df["Y"] < lo) | (df["Y"] > hi)).sum()
         if out_of_range:
-            logger.warning("[%s] %d Y values outside expected range [%g, %g]", endpoint, out_of_range, lo, hi)
+            logger.warning(
+                "[%s] %d Y values (%.1f%%) outside expected range [%g, %g]",
+                endpoint, out_of_range, 100 * out_of_range / len(df), lo, hi,
+            )
 
     if ok:
         logger.info("[%s] OK — %d rows", endpoint, len(df))

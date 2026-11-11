@@ -62,7 +62,7 @@ test:
 	$(PYTHON) -m pytest
 
 coverage:
-	$(PYTHON) -m pytest --cov=src --cov-report=term-missing
+	$(PYTHON) -m pytest --cov=src --cov-report=term-missing --cov-report=html
 
 test-e2e:
 	$(PYTHON) -m pytest -m e2e

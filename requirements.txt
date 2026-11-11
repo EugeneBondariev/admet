@@ -16,4 +16,4 @@ optuna>=3.0.0
 torch>=2.1.0
 torch-geometric>=2.5.0
 torch-cluster>=1.6.3
-setuptools>=77.0.3
+setuptools==77.0.3
